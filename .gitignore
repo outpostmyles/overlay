@@ -1,0 +1,17 @@
+# secrets / local config - NEVER commit real keys
+.env
+!.env.example
+
+# local data + regenerable caches
+poly.db
+poly_*.json
+backend/model/results_cache.csv
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# os
+.DS_Store
