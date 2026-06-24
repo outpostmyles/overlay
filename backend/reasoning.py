@@ -71,7 +71,8 @@ the user to confirm lineups. NEVER invent injuries or news beyond the brief.
 
 STYLE: `headline` = ONE punchy sentence, max ~90 characters, sentence case, stating the single main \
 call — no semicolon-chained lists, and do NOT open with the market-vs-model gap (lead with the \
-sharpest real edge, usually lineup/situation). Keep each rationale to one or two tight sentences."""
+sharpest real edge, usually lineup/situation). Keep each rationale to one or two tight sentences. \
+NEVER use em dashes or en dashes anywhere in your output; use periods, commas, or middle dots (·) instead."""
 
 _SCHEMA = {
     "type": "object",
@@ -172,7 +173,8 @@ async def _research(client, bundle: dict, today: str) -> str:
     q += ("Write a concise factual brief under 140 words IN PLAIN PROSE (no markdown headings or **bold**), "
           "leading with the fitness/lineup status of the favorite's stars. Frame facts as of today and "
           "don't assert exact volatile numbers (group points, weather) you can't confirm. If something "
-          "isn't found, write 'unknown' — NEVER speculate or invent injuries, lineups, or news.")
+          "isn't found, write 'unknown'. NEVER speculate or invent injuries, lineups, or news. "
+          "Do not use em dashes or en dashes; use periods, commas, or middle dots instead.")
     msgs = [{"role": "user", "content": q}]
     # allowed_callers=["direct"] disables programmatic/dynamic-filtering tool calling, which the
     # cheap Haiku tier doesn't support — the model calls web_search directly instead.

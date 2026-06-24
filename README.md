@@ -1,8 +1,25 @@
 # Overlay
 
-A self-hosted research tool for World Cup 2026 that anchors every read to prediction-market prices, measures sportsbooks, props, and an independent model against that anchor, and tracks closing line value to find out whether an edge is actually real.
+Overlay is a closing-line-value engine for sports betting. It anchors every read to prediction-market prices, Polymarket and Kalshi, as the sharp reference, de-vigs them into a no-vig fair probability for each outcome, and grades sportsbook odds, player props, and an independent model against that fair line. Every surfaced bet is logged and scored on closing line value (CLV), the most reliable leading indicator of long-run betting skill, to test whether an edge is actually real.
 
-It is a single-user research tool, not a tipster product. It does not sell picks or promise winners. It is built to test one hypothesis honestly: that durable betting edge comes from market structure (a sharp reference, line shopping, disciplined staking, and closing line value) rather than from "predicting" games.
+It currently runs on the 2026 FIFA World Cup. The tournament is the live dataset the engine is pointed at right now; the prediction-market and stats sources, the team model, and the bet types are all World Cup specific (see Scope below).
+
+It is a single-user research tool, not a tipster product. It does not sell picks or promise winners. It exists to test one hypothesis honestly: that durable edge comes from market structure (a sharp reference, line shopping, disciplined staking, and CLV) rather than from "predicting" games.
+
+## The Polymarket surface
+
+Overlay is built directly on Polymarket data, not just on a price scrape:
+
+- **Direct ingestion.** It reads Polymarket's public Gamma and Data APIs (no key): tournament futures and, where they exist, the per-game win markets. Each is normalized into the same internal market object as every other source and de-vigged into the sharp fair line.
+- **Whale flow and net position.** For each game's market it reads Polymarket holder data and recent trades and computes, per side (favorite and underdog): the largest backer, the holder count, and net money flow as BUY minus SELL shares, classified buying, selling, or flat. This whale read is surfaced as a conviction tiebreaker in the AI match verdict: heavy buying on a side is supporting evidence, selling or a thin holder base is a caution flag. It is weighted as a tiebreaker, not a driver, because game-market volume is thin.
+
+## What it measures and shows
+
+For each selection on the slate, drawn straight from the engine and the UI:
+
+- **De-vigged fair probability vs best price, with EV.** The no-vig fair probability from the sharp prediction-market sources, the best available price across books, and the edge of that price versus fair.
+- **Polymarket whale-flow and net-position read**, used as the tiebreaker described above.
+- **A closing-line-value track record.** Every logged pick freezes its closing fair line at settlement, and the Track Record reports average CLV, beat-close rate (how often the price taken beat the close), units and ROI, a bankroll curve, and a by-archetype breakdown. A confidence-calibration layer can nudge pick confidence by context bucket, but only after a bucket reaches 20 settled picks, so it stays inert until there is enough data to mean anything. These are descriptions of what the tool computes, not performance or profit claims.
 
 ## The thesis
 
@@ -12,12 +29,12 @@ Sharp books like Pinnacle are restricted or unavailable across most of the US, s
 - player props and total-corner lines, and
 - an independent Poisson match model.
 
-Every surfaced bet is logged and scored on closing line value (CLV): did the price you took beat where the market closed. CLV is the most reliable leading indicator of long-run betting skill, so the entire app is built to compute it honestly, on free data, and let the record accumulate over time.
+Every surfaced bet is logged and scored on closing line value: did the price you took beat where the market closed. The entire app is built to compute this honestly, on free data, and let the record accumulate over time.
 
 ## What makes it more than a scraper
 
 ### De-vigging the sharp line
-A raw market price embeds the operator's margin. Overlay removes it with the power method: it solves (via SciPy's `brentq`) for the exponent that makes the de-vigged probabilities across an outcome set sum to 1, recovering each selection's no-vig fair probability. It does this per market across the configured sharp sources (Polymarket + Kalshi) and folds the best sportsbook price plus the edge-versus-fair directly onto each pick, so line shopping happens at the point of decision.
+A raw market price embeds the operator's margin. Overlay removes it with the power method: it solves (via SciPy's `brentq`) for the exponent that makes the de-vigged probabilities across an outcome set sum to 1, recovering each selection's no-vig fair probability. It does this per market across the configured sharp sources (Polymarket + Kalshi) and folds the best sportsbook price plus the edge versus fair directly onto each pick, so line shopping happens at the point of decision.
 
 ### A closed CLV and settlement loop on free data
 The proof loop runs end to end without any paid data feed:
@@ -98,13 +115,16 @@ All API keys are optional. With none set, the app runs fully on the free predict
 Working and in active personal use:
 
 - multi-source ingest with a de-vigged consensus fair line and best-price line shopping,
+- the Polymarket whale-flow and net-position read,
 - archetype-scoped picks (favorite moneylines, anytime goalscorer, shots and shots on target, team totals, popular props, total corners),
 - opponent-adjusted prop and corner projections,
 - same-game parlay pricing,
 - web-grounded AI match verdicts (manual trigger),
 - a full settlement and CLV loop with a bankroll curve and by-archetype record.
 
-Known limits: it is intentionally scoped to one bettor's archetypes; props and corners only surface as bets once enough measured history has banked for the teams or players involved (the model declines to bet a pure prior); and there is no auth or deployment tooling, since it is meant to run locally for a single user.
+Scope: the 2026 FIFA World Cup only. The prediction-market and stats sources, the team model, and the bet archetypes are all World Cup specific; the tool has not been pointed at any other event or sport.
+
+Other known limits: it is intentionally scoped to one bettor's archetypes; props and corners only surface as bets once enough measured history has banked for the teams or players involved (the model declines to bet a pure prior); and there is no auth or deployment tooling, since it is meant to run locally for a single user.
 
 ## Disclaimer
 
