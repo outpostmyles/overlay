@@ -427,7 +427,7 @@ function renderPaper() {
   // by-archetype
   const arch = d.summary.by_archetype;
   const akeys = Object.keys(arch);
-  $("#track-arch").innerHTML = akeys.length ? `<div class="pick-section"><h3>By archetype</h3><table><thead><tr>
+  const archHtml = akeys.length ? `<div class="pick-section"><h3>By archetype</h3><table><thead><tr>
     <th>Archetype</th><th class="num">Picks</th><th class="num">Record</th><th class="num">Hit%</th>
     <th class="num">Avg CLV</th><th class="num">Beat close</th><th class="num">ROI</th></tr></thead><tbody>${
     akeys.map((k) => { const a = arch[k]; return `<tr>
@@ -438,6 +438,20 @@ function renderPaper() {
       <td class="num ${a.avg_clv > 0 ? "ev pos" : ""}">${a.avg_clv == null ? "—" : sgn(a.avg_clv) + "%"}</td>
       <td class="num">${a.beat_close_pct == null ? "—" : a.beat_close_pct + "%"}</td>
       <td class="num">${a.roi_pct == null ? "—" : a.roi_pct + "%"}</td></tr>`; }).join("")}</tbody></table></div>` : "";
+  // model calibration: the model's projected P(hit) vs actual outcomes (fills as new picks settle)
+  const mc = d.summary.model_calibration || {};
+  const mck = Object.keys(mc);
+  const calTbl = mck.length ? `<div class="pick-section"><h3>Model calibration <span class="muted">· projected vs actual once picks settle · Brier lower = sharper (0.25 = coin flip)</span></h3>
+    <table><thead><tr><th>Archetype</th><th class="num">n</th><th class="num">Model says</th><th class="num">Actual</th><th class="num">Gap</th><th class="num">Brier</th></tr></thead><tbody>${
+    mck.map((k) => { const m = mc[k]; const over = m.gap_pp > 5, under = m.gap_pp < -5; return `<tr>
+      <td><span class="tag">${esc(k.replace(/_/g, " "))}</span></td>
+      <td class="num">${m.n}</td>
+      <td class="num">${Math.round(m.mean_pred * 100)}%</td>
+      <td class="num">${Math.round(m.hit_rate * 100)}%</td>
+      <td class="num ${over ? "neg" : ""}">${sgn(m.gap_pp)}pp${over ? " over" : under ? " under" : ""}</td>
+      <td class="num">${m.brier}</td></tr>`; }).join("")}</tbody></table>
+    <div class="cal-note">${ico("track")} A large positive gap (model says &gt; actual) means the model over-projects that archetype. Populates from picks logged after this shipped.</div></div>` : "";
+  $("#track-arch").innerHTML = archHtml + calTbl;
 
   // pick ledger — split Open / Settled, ordered by kickoff
   const body = $("#track-body");

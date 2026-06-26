@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS paper_picks (
     selection TEXT NOT NULL,
     confidence INTEGER,
     commence_time TEXT,
-    pick_fair_prob REAL,          -- no-vig fair prob at pick time (ML only)
+    pick_fair_prob REAL,          -- no-vig fair prob at pick time (ML only) — drives CLV
     pick_price_decimal REAL,      -- best available odds at pick time (ML only)
+    model_prob REAL,              -- the model's OWN projected P(hit) at pick time (props + ML) — for calibration/Brier, NOT CLV
     closing_fair_prob REAL,       -- fair prob near kickoff (updated until the match starts)
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | won | lost | void
     dedup_key TEXT UNIQUE,
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS paper_picks (
 _MIGRATE = [("odds_type", "TEXT"), ("popularity", "INTEGER"),
             ("on_favorite", "INTEGER"), ("agreement_pp", "REAL"),
             ("closing_locked_at", "TEXT"), ("real_money", "INTEGER"),
-            ("stake_units", "REAL"), ("legs_json", "TEXT"), ("game_over_at", "TEXT")]
+            ("stake_units", "REAL"), ("legs_json", "TEXT"), ("game_over_at", "TEXT"),
+            ("model_prob", "REAL")]
 
 
 def _conn() -> sqlite3.Connection:
@@ -83,13 +85,13 @@ def log_picks(rows: list[dict]) -> int:
             cur = c.execute(
                 """INSERT OR IGNORE INTO paper_picks
                    (logged_at, match, archetype, selection, confidence, commence_time,
-                    pick_fair_prob, pick_price_decimal, dedup_key,
+                    pick_fair_prob, pick_price_decimal, model_prob, dedup_key,
                     odds_type, popularity, on_favorite, agreement_pp, stake_units, legs_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (r.get("logged_at") or time.strftime("%Y-%m-%d %H:%M:%S"),
                  r["match"], r["archetype"], r["selection"], r.get("confidence"),
                  r.get("commence_time"), r.get("pick_fair_prob"), r.get("pick_price_decimal"),
-                 r["dedup_key"], r.get("odds_type"), r.get("popularity"),
+                 r.get("model_prob"), r["dedup_key"], r.get("odds_type"), r.get("popularity"),
                  r.get("on_favorite"), r.get("agreement_pp"), r.get("stake_units") or 1.0,
                  r.get("legs_json")),
             )
@@ -534,6 +536,34 @@ def _bankroll_curve(picks: list[dict]) -> tuple[float, list[float]]:
     return round(bank, 2), curve
 
 
+def model_calibration() -> dict:
+    """Per-archetype calibration of the MODEL's projected P(hit) against actual settled outcomes, for
+    picks that logged a model_prob. Brier = mean (pred - outcome)^2 (lower is better, 0.25 = a coin
+    flip). Comparing mean_pred to hit_rate exposes over-projection (mean_pred >> hit_rate) or under.
+    Only populated for picks logged after model_prob shipped, so it fills going forward."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT archetype, model_prob, status FROM paper_picks "
+            "WHERE model_prob IS NOT NULL AND status IN ('won','lost')"
+        ).fetchall()
+    agg: dict = {}
+    for r in rows:
+        d = agg.setdefault(r["archetype"], {"n": 0, "pred": 0.0, "wins": 0, "brier": 0.0})
+        outcome = 1.0 if r["status"] == "won" else 0.0
+        d["n"] += 1
+        d["pred"] += r["model_prob"]
+        d["wins"] += int(outcome)
+        d["brier"] += (r["model_prob"] - outcome) ** 2
+    out = {}
+    for a, d in agg.items():
+        mean_pred = d["pred"] / d["n"]
+        hit = d["wins"] / d["n"]
+        out[a] = {"n": d["n"], "mean_pred": round(mean_pred, 3), "hit_rate": round(hit, 3),
+                  "gap_pp": round((mean_pred - hit) * 100, 1),   # +ve = model over-projects
+                  "brier": round(d["brier"] / d["n"], 3)}
+    return out
+
+
 def summary() -> dict:
     picks = list_picks()
     by_arch = {}
@@ -543,5 +573,6 @@ def summary() -> dict:
     bankroll, curve = _bankroll_curve(picks)
     return {"overall": _agg(picks), "by_archetype": by_arch,
             "real": _agg(real), "real_count": len(real),
+            "model_calibration": model_calibration(),
             "start_bankroll": round(config.BANKROLL, 2), "bankroll": bankroll,
             "bankroll_curve": curve, "unit_dollars": round(config.BANKROLL * config.UNIT_PCT, 2)}

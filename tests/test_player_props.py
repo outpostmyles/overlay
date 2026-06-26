@@ -68,6 +68,23 @@ def test_settle_player_props_won_lost_void():
     os.unlink(config.DB_PATH)
 
 
+def test_model_prob_logs_and_calibration_detects_overprojection():
+    """Props now log the model's projected P(hit); model_calibration grades it (Brier + over/under)."""
+    paper = _fresh_paper()
+    paper.log_picks([{"match": "A vs B", "archetype": "shots_sot", "selection": f"Player{i} Shots Over 1.5",
+                      "commence_time": "2026-06-20", "model_prob": 0.60, "dedup_key": f"m{i}"}
+                     for i in range(4)])
+    assert paper.list_picks()[0]["model_prob"] == 0.60          # round-trips through the new column
+    with paper._conn() as c:                                    # 1 of 4 hits -> model over-projected
+        for i, st in enumerate(["won", "lost", "lost", "lost"]):
+            c.execute("UPDATE paper_picks SET status=? WHERE dedup_key=?", (st, f"m{i}"))
+    cal = paper.model_calibration()["shots_sot"]
+    assert cal["n"] == 4 and cal["mean_pred"] == 0.6 and cal["hit_rate"] == 0.25
+    assert cal["gap_pp"] == 35.0          # +35pp = the model is too optimistic on shots
+    assert cal["brier"] == 0.31           # mean of [(.6-1)^2, .6^2, .6^2, .6^2]
+    os.unlink(config.DB_PATH)
+
+
 def test_settle_player_props_honors_under():
     """Under-phrased props (e.g. fading a hot line) must grade on the UNDER, not silently as an over."""
     paper = _fresh_paper()

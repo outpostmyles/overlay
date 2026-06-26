@@ -498,13 +498,15 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
                 continue  # the model sometimes phrases a pass inside recommended_bets
 
             odds_type = popularity = None
-            on_favorite = agreement_pp = None
+            on_favorite = agreement_pp = mprob = None
             if arch == "favorite_ml" and b.get("favorite"):
                 fav = b["favorite"]
                 fair = (b.get("favorite_fair_pct") or 0) / 100 or None
                 price = ml_price.get((match, fav)) or (round(1 / fair, 3) if fair else None)
                 sel = f"{fav} ML"
                 on_favorite = 1
+                if b.get("favorite_model_pct") is not None:
+                    mprob = b["favorite_model_pct"] / 100.0
                 if b.get("favorite_fair_pct") is not None and b.get("favorite_model_pct") is not None:
                     agreement_pp = round(b["favorite_fair_pct"] - b["favorite_model_pct"], 1)
             else:
@@ -514,10 +516,14 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
                     odds_type = pr.get("type")
                     popularity = pr.get("popularity")
                     on_favorite = 1 if pr.get("team") == b.get("favorite") else 0
+                    if pr.get("model_pct") is not None:        # the model's projected P(hit) on this prop
+                        mprob = pr["model_pct"] / 100.0
+                if mprob is None and arch == "team_total_over" and b.get("team_total_over_1_5_model_pct") is not None:
+                    mprob = b["team_total_over_1_5_model_pct"] / 100.0
             rows.append({
                 "match": match, "archetype": arch, "selection": sel,
                 "confidence": v.get("confidence"), "commence_time": b.get("commence_time"),
-                "pick_fair_prob": fair, "pick_price_decimal": price,
+                "pick_fair_prob": fair, "pick_price_decimal": price, "model_prob": mprob,
                 "dedup_key": f"{today}:{match}:{arch}:{sel}",
                 "odds_type": odds_type, "popularity": popularity,
                 "on_favorite": on_favorite, "agreement_pp": agreement_pp,
@@ -817,6 +823,7 @@ def _corner_paper_row(r: dict) -> dict | None:
     return {
         "match": r["event"], "archetype": "total_corners", "selection": r["selection"],
         "commence_time": r.get("commence_time"), "pick_price_decimal": r.get("price"),
+        "model_prob": r.get("model_prob"),   # model P(side hits) — for calibration/Brier, not CLV
         "dedup_key": f"{today}:corners:{r['event']}",
         "stake_units": 1.5 if r.get("ev", 0) >= 0.08 else 1.0,
     }
