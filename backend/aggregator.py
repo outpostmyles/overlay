@@ -23,7 +23,7 @@ from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi
 from .store import paper
 
-_free_cache: dict = {"markets": [], "props": [], "ts": 0.0}
+_free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False}
 _sm_cache: dict = {"data": {}, "ts": 0.0}
 _resolved_cache: dict = {"data": [], "ts": 0.0}
 _lineup_cache: dict = {"data": {}, "ts": 0.0}
@@ -56,16 +56,48 @@ async def _fetch_free() -> tuple[list[Market], list[dict]]:
     return markets, props
 
 
+def _load_props_disk() -> list[dict]:
+    """Last-good PrizePicks board persisted from a prior run, so a restart that lands during a
+    Cloudflare/DataDome block still serves props instead of a blank board. Ignored if too stale."""
+    p = config.PROPS_CACHE_PATH
+    if not p.exists():
+        return []
+    try:
+        d = json.loads(p.read_text())
+        age_days = (time.time() - (d.get("saved_at") or 0)) / 86400.0
+        if isinstance(d.get("props"), list) and age_days <= config.PROPS_MAX_STALE_DAYS:
+            print(f"[aggregator] seeded {len(d['props'])} last-good props from disk ({age_days:.1f}d old)")
+            return d["props"]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[aggregator] props cache load failed: {exc}")
+    return []
+
+
+def _save_props_disk(props: list[dict]) -> None:
+    if not props:
+        return
+    try:
+        config.PROPS_CACHE_PATH.write_text(json.dumps({"saved_at": time.time(), "props": props}))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[aggregator] props cache save failed: {exc}")
+
+
 async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
+    if not _free_cache["loaded"]:
+        _free_cache["props"] = _load_props_disk()   # survive a restart during a PrizePicks block
+        _free_cache["loaded"] = True
     if (not force and _free_cache["ts"]
             and (time.monotonic() - _free_cache["ts"]) < config.CACHE_TTL_SECONDS):
         return _free_cache["markets"], _free_cache["props"]
     markets, props = await _fetch_free()
     # keep last-good props if this pull came back empty (PrizePicks throttles intermittently) — don't
-    # blank the whole prop board + SGP on a transient miss.
+    # blank the whole prop board + SGP on a transient miss. A fresh board persists to disk so the
+    # last-good survives a process restart too.
     if not props and _free_cache["props"]:
         print("[aggregator] props empty this pull — keeping last-good prop board")
         props = _free_cache["props"]
+    elif props:
+        _save_props_disk(props)
     _free_cache.update(markets=markets, props=props, ts=time.monotonic())
     return markets, props
 

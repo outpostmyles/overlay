@@ -87,6 +87,8 @@ KELLY_FRACTION = 0.25                        # quarter Kelly (variance control)
 UNIT_PCT = float(os.getenv("UNIT_PCT", "0.01") or 0.01)   # 1 unit = 1% of bankroll
 MAX_UNITS = 3.0                              # never risk more than 3 units (3%) on one play
 CACHE_TTL_SECONDS = 60                        # free feed (Polymarket/Kalshi/PrizePicks) cache this long
+PROPS_CACHE_PATH = ROOT / "poly_props_cache.json"   # last-good PrizePicks board, so a restart during a
+PROPS_MAX_STALE_DAYS = 2                       # Cloudflare/DataDome block still serves props (up to N days old)
 LINEUP_CACHE_TTL = 300                        # confirmed-XI cache (5 min)
 RESULTS_CACHE_TTL = 600                       # ESPN finished-game results cache (10 min)
 RESOLVED_CACHE_TTL = 600                      # Kalshi resolved-outcome cache (10 min)

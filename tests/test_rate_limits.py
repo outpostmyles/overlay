@@ -102,6 +102,53 @@ def test_apifootball_empty_stats_cooldown(monkeypatch, tmp_path):
     assert players_calls == 1
 
 
+def test_props_survive_restart_via_disk(monkeypatch, tmp_path):
+    """A restart that lands during a PrizePicks block still serves the last-good board from disk."""
+    import json, time as _t
+    pf = tmp_path / "props.json"
+    monkeypatch.setattr(config, "PROPS_CACHE_PATH", pf)
+    pf.write_text(json.dumps({"saved_at": _t.time(), "props": [{"player": "X"}, {"player": "Y"}, {"player": "Z"}]}))
+    aggregator._free_cache.update(markets=[], props=[], ts=0.0, loaded=False)   # fresh process
+
+    async def throttled():
+        return [], []   # PrizePicks empty
+
+    monkeypatch.setattr(aggregator, "_fetch_free", throttled)
+    _, props = asyncio.run(aggregator.get_free(force=True))
+    assert len(props) == 3
+
+
+def test_stale_disk_props_ignored(monkeypatch, tmp_path):
+    import json, time as _t
+    pf = tmp_path / "props.json"
+    monkeypatch.setattr(config, "PROPS_CACHE_PATH", pf)
+    old = _t.time() - (config.PROPS_MAX_STALE_DAYS + 1) * 86400
+    pf.write_text(json.dumps({"saved_at": old, "props": [{"player": "stale"}]}))
+    aggregator._free_cache.update(markets=[], props=[], ts=0.0, loaded=False)
+
+    async def throttled():
+        return [], []
+
+    monkeypatch.setattr(aggregator, "_fetch_free", throttled)
+    _, props = asyncio.run(aggregator.get_free(force=True))
+    assert props == []   # too old -> not served
+
+
+def test_fresh_props_persist_to_disk(monkeypatch, tmp_path):
+    import json
+    pf = tmp_path / "props.json"
+    monkeypatch.setattr(config, "PROPS_CACHE_PATH", pf)
+    aggregator._free_cache.update(markets=[], props=[], ts=0.0, loaded=False)
+
+    async def good():
+        return [], [{"player": "A"}, {"player": "B"}]
+
+    monkeypatch.setattr(aggregator, "_fetch_free", good)
+    asyncio.run(aggregator.get_free(force=True))
+    saved = json.loads(pf.read_text())
+    assert len(saved["props"]) == 2 and "saved_at" in saved
+
+
 def test_espn_memoizes_finished_games(monkeypatch, tmp_path):
     from backend.sources import espn
     monkeypatch.setattr(config, "ESPN_CACHE_PATH", tmp_path / "espn.json")
