@@ -71,6 +71,8 @@ TEAM_TOTAL_LINE = 1.5
 SLATE_HORIZON_DAYS = 4                        # only today + next N days (daily bettor focus)
 CHALK_PROB = 0.80                            # >= this fair % = "obvious chalk" (de-emphasized)
 PROPREAD_CACHE_PATH = ROOT / "poly_propread_cache.json"
+FUTURESREAD_CACHE_PATH = ROOT / "poly_futuresread_cache.json"   # on-demand AI read per futures row
+LEANS_PATH = ROOT / "poly_futures_leans.json"                   # user-logged futures leans (CLV-tracked)
 ENABLE_MEMORY = True                         # calibration: learn from the paper ledger (gated, safe)
 
 # --- AI reasoning (manual-trigger, disk-cached — never on the auto-refresh) ---

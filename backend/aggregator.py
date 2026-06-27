@@ -21,7 +21,7 @@ from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi
-from .store import paper
+from .store import leans, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False}
 _sm_cache: dict = {"data": {}, "ts": 0.0}
@@ -1046,8 +1046,35 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
     rows.sort(key=lambda r: r["_sort"])
     for r in rows:
         r.pop("_sort", None)
+    shown = {r["team"] for r in rows}
     return {"rows": rows, "groups_covered": covered, "sims": config.TOURNAMENT_SIMS,
-            "games_locked": len(played)}
+            "games_locked": len(played), "records": _team_records(results, shown)}
+
+
+def _team_records(results: list[dict] | None, teams: set) -> dict:
+    """{team: '3-0-0 - senegal 3-1, iraq 3-0'} recent-results record per shown team, passed to the AI
+    Read so it reasons over what actually happened. A game counts for a shown team whatever the opponent
+    (so the record is not truncated when the opponent isn't on the board); `teams` only limits WHOSE
+    records we build, to keep the payload small. Drawn from the rolling results window, so late in the
+    tournament it is the team's recent games, not necessarily its full history."""
+    by: dict = {}
+    for g in results or []:
+        ents = list((g.get("goals") or {}).items())
+        if len(ents) != 2:
+            continue
+        (a, ga_), (b, gb_) = ents
+        if a in teams:
+            by.setdefault(a, []).append((g.get("date", ""), b, ga_, gb_))
+        if b in teams:
+            by.setdefault(b, []).append((g.get("date", ""), a, gb_, ga_))
+    out: dict = {}
+    for t, games in by.items():
+        games.sort()
+        w = sum(1 for _, _, gf, ga in games if gf > ga)
+        d = sum(1 for _, _, gf, ga in games if gf == ga)
+        rec = ", ".join(f"{opp} {gf}-{ga}" for _, opp, gf, ga in games)
+        out[t] = f"{w}-{d}-{len(games) - w - d} - {rec}"
+    return out
 
 
 async def get_futures(markets: list[Market], model, results: list[dict] | None = None) -> dict:
@@ -1109,7 +1136,10 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # Futures: tournament sim (second opinion) vs the de-vigged Polymarket winner/group-winner line.
     # Fetch results up front so the sim locks in already-played group games (cached, reused below).
     results = await get_results(force=force)
-    picks_board["futures"] = await get_futures(markets, model, results)
+    _fb = await get_futures(markets, model, results)
+    # attach the user's logged leans fresh each snapshot (not inside the cached sim) so a just-logged
+    # lean shows up immediately, with CLV recomputed against the current board.
+    picks_board["futures"] = {**_fb, "leans": leans.enrich(_fb.get("rows", []))}
 
     # AI reasoning — manual-trigger (reason=True) spends; otherwise reuse the disk cache
     bundles = picks_board.get("match_bundles", [])

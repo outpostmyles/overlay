@@ -8,8 +8,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import aggregator, config, propread
-from .store import paper
+from . import aggregator, config, futures_read, propread
+from .store import leans, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
@@ -28,6 +28,30 @@ async def health() -> dict:
 async def propread_ep(prop: dict, web: bool = False) -> dict:
     """On-demand AI read for one prop (cheap, cached). Falls back to the heuristic without a key."""
     return await propread.ai_read(prop, web=web)
+
+
+@app.post("/api/futuresread")
+async def futuresread_ep(payload: dict, web: bool = False) -> dict:
+    """On-demand AI read for one futures row: weighs the team's record, the model %, the de-vigged
+    market %, and the user's scouting notes into a back/fade/pass. Cheap, cached, heuristic without a key."""
+    return await futures_read.ai_read(payload, web=web)
+
+
+@app.post("/api/futures/lean")
+async def add_lean_ep(lean: dict) -> dict:
+    """Log a futures lean (back/fade) at the current market %, so the ledger can track its CLV."""
+    try:
+        entry = float(lean.get("entry_pct"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="entry_pct (number) is required")
+    if not lean.get("team") or not lean.get("kind"):
+        raise HTTPException(status_code=400, detail="team and kind are required")
+    return leans.add(lean["team"], lean["kind"], lean.get("direction", "back"), entry, lean.get("note", ""))
+
+
+@app.delete("/api/futures/lean/{lean_id}")
+async def remove_lean_ep(lean_id: str) -> dict:
+    return {"removed": leans.remove(lean_id)}
 
 
 @app.get("/api/snapshot")

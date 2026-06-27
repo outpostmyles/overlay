@@ -77,26 +77,47 @@ function renderAll() {
 
 const teamName = (k) => (k || "").replace(/\b\w/g, (c) => c.toUpperCase());
 
+function scoutNotes() { return localStorage.getItem("overlay_futures_notes") || ""; }
+
+function renderLeans(leans) {
+  if (!leans || !leans.length) return "";
+  const rows = leans.map((l) => {
+    const dr = l.drift_pp, cls = dr == null ? "muted" : dr > 0 ? "flow-up" : dr < 0 ? "flow-dn" : "muted";
+    return `<tr><td><b>${esc(teamName(l.team))}</b> <span class="tag">${esc(l.direction)}</span> <span class="muted">${esc(l.kind)}</span>${l.note ? `<div class="lean-note">“${esc(l.note)}”</div>` : ""}</td>
+      <td class="num">${l.entry_pct}%</td>
+      <td class="num">${l.current_pct == null ? "—" : l.current_pct + "%"}</td>
+      <td class="num ${cls}">${dr == null ? "—" : (dr > 0 ? "+" : "") + dr + "pp"}</td>
+      <td><button class="act tiny" data-lean-rm="${esc(l.id)}" title="remove this lean">×</button></td></tr>`;
+  }).join("");
+  return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted">· Drift is the sharp line moving toward your call since you logged it (up for a back, down for a fade), a CLV-style signal, not a settled bet</span></h3>
+    <table><thead><tr><th>Lean</th><th class="num">Entry</th><th class="num">Now</th><th class="num">Drift</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
 function renderFutures() {
   const f = (state.snapshot && state.snapshot.picks && state.snapshot.picks.futures) || { rows: [], groups_covered: 0, sims: 0 };
   const box = $("#futures-body"); if (!box) return;
+  const live = $("#scout-notes"); const noteVal = live ? live.value : scoutNotes();
+  const notes = `<div class="scout"><label for="scout-notes">${ico("analyze")} Your scouting notes <span class="muted">· what you've seen watching the games, fed into every Read</span></label>
+    <textarea id="scout-notes" rows="2" placeholder="e.g. Spain flat, created nothing vs Cabo Verde; France clinical; Mexico crowd is a real factor">${esc(noteVal)}</textarea></div>`;
   if (!f.rows.length) {
-    box.innerHTML = `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
+    box.innerHTML = notes + `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
     return;
   }
-  const byKind = {};
+  const byKind = {}, recs = f.records || {};
   f.rows.forEach((r) => { (byKind[r.kind] = byKind[r.kind] || []).push(r); });
   const row = (r) => `<tr><td><b>${esc(teamName(r.team))}</b></td>
       <td class="num"><b>${r.market_pct}%</b></td>
       <td class="num muted">${r.model_pct}%</td>
-      <td class="num muted">${r.gap_pp > 0 ? "+" : ""}${r.gap_pp}pp</td></tr>`;
+      <td class="num muted">${r.gap_pp > 0 ? "+" : ""}${r.gap_pp}pp</td>
+      <td class="fut-act"><button class="act" data-fread data-team="${esc(r.team)}" data-kind="${esc(r.kind)}" data-mk="${r.market_pct}" data-md="${r.model_pct}" data-rec="${esc(recs[r.team] || "")}">Read</button><button class="act tiny" data-flean data-dir="back" data-team="${esc(r.team)}" data-kind="${esc(r.kind)}" data-pct="${r.market_pct}" title="Log a back: you think MORE likely than ${r.market_pct}%">Back</button><button class="act tiny" data-flean data-dir="fade" data-team="${esc(r.team)}" data-kind="${esc(r.kind)}" data-pct="${r.market_pct}" title="Log a fade: you think LESS likely than ${r.market_pct}%">Fade</button></td></tr>`;
   const section = (kind) => `<div class="pick-section"><h3>${esc(kind)}</h3>
-    <table><thead><tr><th>Team</th><th class="num">Market</th><th class="num">Model</th><th class="num">Δ model</th></tr></thead>
+    <table><thead><tr><th>Team</th><th class="num">Market</th><th class="num">Model</th><th class="num">Δ model</th><th class="num">Act</th></tr></thead>
     <tbody>${byKind[kind].map(row).join("")}</tbody></table></div>`;
   const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
   box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span></h2>`
-    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent, opponent-adjusted bracket simulation shown as a second opinion. It reads tournament odds off long-run goal records, so it can diverge from the market in either direction (over-rating teams with dominant scoring histories, under-rating those whose value the market prices beyond goals). Read <b>Δ model</b> as where an independent estimate disagrees, not as an edge to bet.</div>`
-    + Object.keys(byKind).map(section).join("");
+    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent, opponent-adjusted second opinion that can diverge either way (over-rating dominant long-run scorers, under-rating teams the market values beyond goals). Tap <b>Read</b> for an AI take that weighs your notes against the gap, then <b>Back</b> / <b>Fade</b> to log a lean and watch the line drift toward your call.</div>`
+    + notes + renderLeans(f.leans) + Object.keys(byKind).map(section).join("");
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }
 
@@ -598,6 +619,46 @@ document.addEventListener("click", async (e) => {
   } catch (err) { btn.textContent = "Read"; btn.disabled = false; }
 });
 
+// Futures tab: persist scouting notes; per-row AI Read; log/remove a lean (delegated)
+document.addEventListener("input", (e) => {
+  if (e.target.id === "scout-notes") localStorage.setItem("overlay_futures_notes", e.target.value);
+});
+document.addEventListener("click", async (e) => {
+  const rd = e.target.closest("[data-fread]");
+  if (rd) {
+    rd.textContent = "…"; rd.disabled = true;
+    const payload = { team: rd.dataset.team, kind: rd.dataset.kind,
+      market_pct: parseFloat(rd.dataset.mk), model_pct: parseFloat(rd.dataset.md),
+      record: rd.dataset.rec, notes: scoutNotes() };
+    try {
+      const r = await getJSON("/api/futuresread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const cls = r.lean === "back" ? "read-over" : r.lean === "fade" ? "read-avoid" : "read-neutral";
+      const conf = r.confidence ? ` ${r.confidence}/5` : "";
+      const det = el(`<tr class="detail"><td colspan="5"><span class="readlean ${cls}">AI: ${esc(r.lean)}${conf}</span> <span class="muted">${esc(r.why || "")}</span>${r.source === "haiku" && !r.cached ? ' <span class="src pm">live</span>' : ""}</td></tr>`);
+      rd.closest("tr").after(det); rd.style.display = "none";
+    } catch (err) { rd.textContent = "Read"; rd.disabled = false; }
+    return;
+  }
+  const ln = e.target.closest("[data-flean]");
+  if (ln) {
+    const note = prompt(`Optional note for your ${ln.dataset.dir} on ${teamName(ln.dataset.team)} (${ln.dataset.kind}):`, "");
+    if (note === null) return;   // cancelled
+    ln.disabled = true;
+    try {
+      await getJSON("/api/futures/lean", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ team: ln.dataset.team, kind: ln.dataset.kind, direction: ln.dataset.dir, entry_pct: parseFloat(ln.dataset.pct), note: note.trim() }) });
+      await loadSnapshot();
+    } catch (err) { ln.disabled = false; }
+    return;
+  }
+  const rm = e.target.closest("[data-lean-rm]");
+  if (rm) {
+    rm.disabled = true;
+    try { await getJSON("/api/futures/lean/" + encodeURIComponent(rm.dataset.leanRm), { method: "DELETE" }); await loadSnapshot(); }
+    catch (err) { rm.disabled = false; }
+  }
+});
+
 // hide-chalk toggle (delegated; persists across re-renders via the body class)
 document.addEventListener("change", (e) => {
   if (e.target.id === "hide-chalk") document.body.classList.toggle("hide-chalk", e.target.checked);
@@ -624,5 +685,6 @@ loadSnapshot();
 // a situational brief or a per-prop Read row expanded (they'll get fresh data on the next tick).
 setInterval(() => {
   if (document.querySelector(".ai-research[open], tr.detail")) return;
+  if (document.activeElement && document.activeElement.id === "scout-notes") return;  // don't yank notes mid-type
   loadSnapshot();
 }, 60000);

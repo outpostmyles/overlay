@@ -392,6 +392,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent); box-shad
 input::placeholder { color: var(--muted); }
 .act { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); padding: 4px 10px; font-size: 12px; border-radius: 7px; cursor: pointer; transition: color .15s, border-color .15s; }
 .act:hover { color: var(--text); border-color: var(--border-bright); }
+.act.tiny { padding: 3px 7px; font-size: 11px; margin-left: 5px; }
+.fut-act { white-space: nowrap; text-align: right; }
+.scout { margin: 0 0 14px; }
+.scout label { display: flex; align-items: center; gap: 6px; font: 600 11px var(--font-ui); color: var(--muted); margin-bottom: 5px; }
+.scout label .ico { width: 13px; height: 13px; }
+.scout textarea { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; font: 12.5px/1.5 var(--font-ui); resize: vertical; box-sizing: border-box; }
+.scout textarea:focus { outline: none; border-color: var(--accent); }
+.lean-note { font: italic 11.5px var(--font-ui); color: var(--muted); margin-top: 2px; }
 
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {
