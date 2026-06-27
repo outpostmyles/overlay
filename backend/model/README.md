@@ -1,10 +1,18 @@
 # Match model — Poisson / Dixon-Coles 1X2
 
 `ratings.py` builds a deliberately simple, transparent "second opinion" on soccer
-matches: empirical attack/defense strengths from the free [martj42 international
-results](https://github.com/martj42/international_results) dataset, turned into
-Poisson goal rates and a 1X2 (home / draw / away) probability via a Dixon-Coles
-low-score correction.
+matches: empirical, **opponent-adjusted** attack/defense strengths from the free
+[martj42 international results](https://github.com/martj42/international_results)
+dataset, turned into Poisson goal rates and a 1X2 (home / draw / away) probability
+via a Dixon-Coles low-score correction.
+
+The ratings are opponent-adjusted by a deterministic fixed-point iteration: a team's
+attack is its goals scored divided by what an average attack would have scored
+against the *same defenses it actually faced*, and symmetrically for defense. So
+piling up goals on weak opponents no longer inflates a rating the way a raw
+goals-per-game average would, which is the flaw that made an all-history flat model
+over-credit padded qualifying records. Each rating is shrunk toward league average
+by a `PRIOR`-game pseudo-count for thin-sample teams.
 
 It is **not** a market-beater on its own (even FiveThirtyEight's SPI lost to
 Pinnacle's closing line over 36k matches). Its job is to flag matches where an
@@ -82,16 +90,19 @@ is roughly 3x that scale, so the practical reading is:
 - **RPS < ~0.21** and clearly below the base-rate RPS → respectable, useful.
 - Model must beat base-rate on **all three** metrics → pass.
 
-### Last measured (cutoff 2025-01-01, 7719 train / 1339 scored test)
+### Last measured (cutoff 2025-01-01, 7719 train / 1371 scored test)
 
 | metric  | model  | uniform | base-rate | beats? |
 |---------|--------|---------|-----------|--------|
-| Brier   | 0.5508 | 0.6667  | 0.6293    | yes    |
-| LogLoss | 0.9299 | 1.0986  | 1.0448    | yes    |
-| RPS     | 0.1896 | 0.2398  | 0.2267    | yes    |
+| Brier   | 0.5079 | 0.6667  | 0.6294    | yes    |
+| LogLoss | 0.8652 | 1.0986  | 1.0449    | yes    |
+| RPS     | 0.1700 | 0.2400  | 0.2270    | yes    |
 
 Verdict: **PASS** — beats both baselines on every metric, and is stable across
-cutoffs (2024-06-01 gives essentially the same numbers on ~2250 test matches).
+cutoffs (2024-01-01 gives 0.5249 / 0.8919 / 0.1748, still clear of both baselines).
+The opponent adjustment is a real out-of-sample gain over the earlier raw-average
+ratings (which scored 0.5517 / 0.9312 / 0.1902 on this same split), about 8% better
+Brier and 11% better RPS, not a fit to any market.
 
 ## Calibration caveats
 

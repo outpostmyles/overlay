@@ -95,7 +95,7 @@ function renderFutures() {
     <tbody>${byKind[kind].map(row).join("")}</tbody></table></div>`;
   const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
   box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span></h2>`
-    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent bracket simulation shown as a second opinion; it runs deliberately conservative in the knockout (a simple ratings model under-separates elite teams), so it sits below the market on most favorites. Read <b>Δ model</b> as where the model is more cautious, not as an edge to bet.</div>`
+    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent, opponent-adjusted bracket simulation shown as a second opinion. It reads tournament odds off long-run goal records, so it can diverge from the market in either direction (over-rating teams with dominant scoring histories, under-rating those whose value the market prices beyond goals). Read <b>Δ model</b> as where an independent estimate disagrees, not as an edge to bet.</div>`
     + Object.keys(byKind).map(section).join("");
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }

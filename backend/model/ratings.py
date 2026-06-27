@@ -13,6 +13,7 @@ import csv
 import io
 import math
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -22,6 +23,7 @@ from ..matching import normalize_team
 DATA_URL = "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
 SINCE_YEAR = 2017
 PRIOR = 6.0          # shrinkage strength toward league average (low-sample teams)
+RATING_ITERS = 60    # opponent-adjustment fixed-point passes (ratings converge by ~40; 60 is margin)
 MAX_GOALS = 10
 DC_RHO = -0.05       # Dixon-Coles low-score correction (fixed default)
 
@@ -159,22 +161,22 @@ def load_matches(since_year: int = SINCE_YEAR) -> list[dict]:
 def build_ratings(matches: list[dict]) -> "MatchModel | None":
     """Build a MatchModel from an already-loaded, normalized list of matches.
 
-    Used by both production (full dataset) and the backtest (a date-bounded
-    training subset). Identical math to the original _build()."""
-    gf: dict[str, float] = {}
-    ga: dict[str, float] = {}
-    n: dict[str, int] = {}
+    Used by both production (full dataset) and the backtest (a date-bounded training subset).
+
+    Ratings are OPPONENT-ADJUSTED: attack[t] and defense[t] solve, by a synchronous fixed-point
+    iteration, expected goals(t vs o) = base * attack[t] * defense[o]. A team's attack is its goals
+    scored divided by what an average attack would have scored against the SAME defenses it faced, so
+    routing minnows no longer inflates a rating the way a raw goals-per-game average does (the flaw that
+    made the flat model over-credit padded qualifying records). Each rating is shrunk toward 1.0 by a
+    PRIOR-game pseudo-count so thin-sample teams stay near league average. The fit is deterministic
+    (Jacobi updates, no randomness), which the leak-free holdout backtest relies on."""
+    teams: set[str] = set()
     total_goals = 0.0
     count = 0
     for m in matches:
-        h, a, hs, as_ = m["home"], m["away"], m["hs"], m["as_"]
-        gf[h] = gf.get(h, 0) + hs
-        ga[h] = ga.get(h, 0) + as_
-        n[h] = n.get(h, 0) + 1
-        gf[a] = gf.get(a, 0) + as_
-        ga[a] = ga.get(a, 0) + hs
-        n[a] = n.get(a, 0) + 1
-        total_goals += hs + as_
+        teams.add(m["home"])
+        teams.add(m["away"])
+        total_goals += m["hs"] + m["as_"]
         count += 1
 
     if count < 100:
@@ -182,13 +184,29 @@ def build_ratings(matches: list[dict]) -> "MatchModel | None":
         return None
 
     base = total_goals / (2 * count)  # avg goals per team per match
-    attack: dict[str, float] = {}
-    defense: dict[str, float] = {}
-    for t in n:
-        att_rate = (gf[t] + PRIOR * base) / (n[t] + PRIOR)
-        def_rate = (ga[t] + PRIOR * base) / (n[t] + PRIOR)
-        attack[t] = att_rate / base
-        defense[t] = def_rate / base
+    attack: dict[str, float] = {t: 1.0 for t in teams}
+    defense: dict[str, float] = {t: 1.0 for t in teams}
+    for _ in range(RATING_ITERS):
+        num_a: dict[str, float] = defaultdict(float)   # goals scored
+        den_a: dict[str, float] = defaultdict(float)   # goals an average attack would score vs same defenses
+        num_d: dict[str, float] = defaultdict(float)   # goals conceded
+        den_d: dict[str, float] = defaultdict(float)   # goals an average attack would score vs this defense
+        for m in matches:
+            h, a, hs, as_ = m["home"], m["away"], m["hs"], m["as_"]
+            num_a[h] += hs; den_a[h] += base * defense[a]
+            num_a[a] += as_; den_a[a] += base * defense[h]
+            num_d[h] += as_; den_d[h] += base * attack[a]
+            num_d[a] += hs; den_d[a] += base * attack[h]
+        for t in teams:
+            attack[t] = (num_a[t] + PRIOR * base) / (den_a[t] + PRIOR * base)    # shrinks toward 1.0
+            defense[t] = (num_d[t] + PRIOR * base) / (den_d[t] + PRIOR * base)
+        # Pin the scale degeneracy: attack[a]*defense[o] is invariant under attack*=k, defense/=k, so
+        # without this the absolute ratings drift forever (predictions converge, the numbers don't).
+        # Normalize mean attack to 1.0 and rescale defense inversely (products, and predictions, unchanged).
+        mean_a = sum(attack.values()) / len(attack)
+        for t in teams:
+            attack[t] /= mean_a
+            defense[t] *= mean_a
     return MatchModel(attack, defense, base)
 
 
