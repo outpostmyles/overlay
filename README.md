@@ -59,6 +59,11 @@ The per-90 rate is the player's measured rate (accumulated from API-Football) sh
 ### An honestly backtested match model
 An independent Poisson / Dixon-Coles rating model is trained on roughly 9,000 international results since 2017. It is validated on a time-split holdout and scored on Brier score, log loss, and ranked probability score against naive baselines, with documented avoidance of data leakage. It is presented as a second opinion, not a market-beater; the model README is candid that a simple ratings model does not beat a sharp closing line. See `backend/model/README.md`.
 
+### A de-vigged knockout futures board, with a Monte Carlo bracket as the second opinion
+The markets Polymarket runs at the most volume are whole-tournament: win the cup, reach the semi-final, reach the quarter-final, reach the round of 16. The Futures tab leads with the de-vigged version of these: each market is normalized so the probabilities sum to the number of teams that actually reach the stage (1 for the winner, 4 for the semi, 8 for the quarter, 16 for the round of 16), which strips the book margin and yields a clean vig-free probability for every team. That sharp number is the headline.
+
+Alongside it rides an independent second opinion: a Monte Carlo simulation that reconstructs the twelve group compositions from finished games alone (union-find over who-played-whom, with component size capped at four, so it needs no group-winner markets and stays correct once cross-group knockout games begin), plays the bracket out thousands of times from the match model's Poisson goal rates conditioned on every group result so far, and reports each team's reach-stage and win-cup frequency. The honesty is the point: a simple ratings model under-separates elite teams, so in the open knockout the simulation runs systematically more conservative than a sharp market, and the tab says so and shows the gap as neutral context rather than a betting edge. The group stage is exact (full round robin, top two plus the eight best thirds, ranked on points then goal difference then goals for); the knockout is a strength-seeded single-elimination approximation, the official bracket draw is not modeled, each round re-seeds strong-vs-weak and ties go 50/50 on penalties, so deep-run numbers are directional. The 12-group field is reconstructed from finished games (so it survives the group-winner markets closing), frozen to disk once every group is a complete round robin, and the simulation runs off the event loop because it is CPU-bound. Surfaced on the Futures tab.
+
 ### Hard API-budget engineering
 Free, no-key feeds (Polymarket, Kalshi, PrizePicks, ESPN) ride a 60-second auto-refresh behind short caches. The two paid or metered feeds are gated so they cannot run away:
 
@@ -82,7 +87,7 @@ The result runs all month without nearing any limit.
 backend/
   sources/      polymarket · kalshi · prizepicks · theoddsapi · espn · apifootball  (adapters -> normalized markets)
   engine/       odds_math (convert / de-vig / Kelly) · edges (fair line + best price)
-  model/        ratings (Poisson 1X2) · props (opponent-adjusted props) · corners · parlay · player_rates
+  model/        ratings (Poisson 1X2) · props (opponent-adjusted props) · corners · tournament (Monte Carlo bracket) · parlay · player_rates
   store/        paper (SQLite ledger, settlement, CLV, P/L)
   matching.py   team and market normalization across sources
   smartmoney.py Polymarket per-game whale positions and flow

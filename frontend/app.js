@@ -71,7 +71,32 @@ function renderAll() {
   }
   renderPicks();
   renderResearch();
+  renderFutures();
   if (state.tab === "track") loadPaper();
+}
+
+const teamName = (k) => (k || "").replace(/\b\w/g, (c) => c.toUpperCase());
+
+function renderFutures() {
+  const f = (state.snapshot && state.snapshot.picks && state.snapshot.picks.futures) || { rows: [], groups_covered: 0, sims: 0 };
+  const box = $("#futures-body"); if (!box) return;
+  if (!f.rows.length) {
+    box.innerHTML = `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
+    return;
+  }
+  const byKind = {};
+  f.rows.forEach((r) => { (byKind[r.kind] = byKind[r.kind] || []).push(r); });
+  const row = (r) => `<tr><td><b>${esc(teamName(r.team))}</b></td>
+      <td class="num"><b>${r.market_pct}%</b></td>
+      <td class="num muted">${r.model_pct}%</td>
+      <td class="num muted">${r.gap_pp > 0 ? "+" : ""}${r.gap_pp}pp</td></tr>`;
+  const section = (kind) => `<div class="pick-section"><h3>${esc(kind)}</h3>
+    <table><thead><tr><th>Team</th><th class="num">Market</th><th class="num">Model</th><th class="num">Δ model</th></tr></thead>
+    <tbody>${byKind[kind].map(row).join("")}</tbody></table></div>`;
+  const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
+  box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span></h2>`
+    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent bracket simulation shown as a second opinion; it runs deliberately conservative in the knockout (a simple ratings model under-separates elite teams), so it sits below the market on most favorites. Read <b>Δ model</b> as where the model is more cautious, not as an edge to bet.</div>`
+    + Object.keys(byKind).map(section).join("");
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }
 

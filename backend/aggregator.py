@@ -18,7 +18,7 @@ import httpx
 from . import config, memory, picks, reasoning, smartmoney
 from .engine import edges, odds_math
 from .matching import moneyline_key, normalize_team
-from .model import corners, ratings
+from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi
 from .store import paper
@@ -32,6 +32,8 @@ _odds_state: dict = {"markets": [], "fetched_at": 0.0, "credits_remaining": None
                      "ok": False, "loaded": False}
 # corner total lines (The Odds API, pricey/manual) — kept teams-keyed, persisted in the odds cache file
 _corner_state: dict = {"lines": {}, "fetched_at": 0.0}
+# futures: Monte Carlo tournament sim vs de-vigged Polymarket futures (expensive → cached + threaded)
+_futures_cache: dict = {"data": {"rows": [], "groups_covered": 0, "sims": 0}, "ts": 0.0}
 
 
 # --------------------------------------------------------------------------- #
@@ -844,6 +846,226 @@ def _corner_paper_row(r: dict) -> dict | None:
 
 
 # --------------------------------------------------------------------------- #
+# Futures: tournament simulation vs the de-vigged Polymarket futures line
+# --------------------------------------------------------------------------- #
+def _pm_prob(sel) -> float | None:
+    for q in sel.quotes:
+        if q.source == "polymarket":
+            return q.mid_prob or q.implied_prob
+    return None
+
+
+def _load_groups_disk() -> dict:
+    p = config.GROUPS_CACHE_PATH
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    return {}
+
+
+def _save_groups_disk(g: dict) -> None:
+    try:
+        config.GROUPS_CACHE_PATH.write_text(json.dumps(g))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[aggregator] groups cache save failed: {exc}")
+
+
+def _team_game_counts(results: list[dict] | None) -> dict:
+    counts: dict = {}
+    for game in results or []:
+        for t in (game.get("goals") or {}):
+            counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
+def _reconstruct_groups_from_results(results: list[dict] | None) -> dict:
+    """Rebuild the 12 group compositions from finished games alone. Two teams are groupmates iff they are
+    among each other's FIRST THREE opponents (every team plays its three groupmates first, then knockout
+    games), so cross-group knockout fixtures - which are each side's 4th+ game - never create an edge.
+    Returns {label: [team, ...]} for the size-4 connected components. During the group stage there are no
+    cross-group games at all, so the components are exactly the groups; the caller only trusts a live
+    reconstruction while no knockout game has been played (else it leans on the frozen disk field), which
+    closes the one hole this has: a stray cross-group edge into a not-yet-complete group. Needs no
+    markets, so it survives the group-winner markets closing as the stage ends."""
+    opp: dict = {}
+    for game in sorted(results or [], key=lambda g: g.get("date") or ""):
+        teams = list((game.get("goals") or {}).keys())
+        if len(teams) != 2:
+            continue
+        for x, y in ((teams[0], teams[1]), (teams[1], teams[0])):
+            lst = opp.setdefault(x, [])
+            if y not in lst and len(lst) < 3:      # only a team's first three opponents (its group games)
+                lst.append(y)
+
+    adj: dict = {}
+    for a, lst in opp.items():
+        for b in lst:
+            if a in opp.get(b, []):                # mutual: both list each other -> a real group pairing
+                adj.setdefault(a, set()).add(b)
+                adj.setdefault(b, set()).add(a)
+
+    seen: set = set()
+    out: dict = {}
+    idx = 0
+    for start in adj:
+        if start in seen:
+            continue
+        stack, comp = [start], []
+        while stack:
+            u = stack.pop()
+            if u in seen:
+                continue
+            seen.add(u)
+            comp.append(u)
+            stack.extend(adj[u] - seen)
+        if len(comp) == 4:
+            out[f"grp{idx}"] = sorted(comp)
+            idx += 1
+    return out
+
+
+def _valid_field(field) -> bool:
+    """A trustworthy group field is exactly 12 groups of 4 teams (rejects the old letter-keyed cache)."""
+    return (isinstance(field, dict) and len(field) == 12
+            and all(isinstance(v, list) and len(v) == 4 for v in field.values()))
+
+
+def _field_complete(field: dict, results: list[dict] | None) -> bool:
+    """True once every one of the 12 groups is a complete round robin (all six pairings played) - the
+    point at which the composition is final and safe to freeze to disk."""
+    if not _valid_field(field):
+        return False
+    pairs = {frozenset(list((g.get("goals") or {}).keys()))
+             for g in (results or []) if len((g.get("goals") or {})) == 2}
+    for teams in field.values():
+        for i in range(4):
+            for j in range(i + 1, 4):
+                if frozenset((teams[i], teams[j])) not in pairs:
+                    return False
+    return True
+
+
+def _played_in_groups(results: list[dict] | None, groups: dict) -> dict:
+    """{frozenset({a,b}): {a: goals, b: goals}} for finished games between two same-group teams, so the
+    sim locks in the standings so far instead of re-playing decided matches (otherwise mid-tournament it
+    would price a nearly-settled group as if it were kickoff and show phantom edges). Earliest game per
+    pair wins, so a later knockout rematch of a group pairing cannot overwrite the real group result."""
+    if not results:
+        return {}
+    team_group = {t: g for g, ts in groups.items() for t in ts}
+    played: dict = {}
+    for game in sorted(results, key=lambda g: g.get("date") or ""):
+        goals = game.get("goals") or {}
+        pair = [t for t in goals if t in team_group]
+        if len(pair) == 2 and team_group[pair[0]] == team_group[pair[1]]:
+            key = frozenset(pair)
+            if key not in played:                  # keep the group-stage game, ignore a knockout rematch
+                a, b = pair
+                played[key] = {a: goals[a], b: goals[b]}
+    return played
+
+
+def _devig_market(market, target: float, valid_teams: set) -> dict:
+    """{team: probability} from a Polymarket futures market, scaled so the probabilities sum to `target`
+    (the number of teams that reach the stage: 16 for the R16, 8 for the QF, 4 for the SF, 1 for the
+    winner). Only genuine teams (those in the reconstructed field) share the slot budget, so a placeholder
+    selection cannot quietly absorb part of it and understate every real team. Normalizing to the known
+    slot count removes the book's margin."""
+    probs: dict = {}
+    for s in market.selections:
+        p = _pm_prob(s)
+        if s.key and p and s.key in valid_teams:
+            probs[s.key] = p
+    tot = sum(probs.values()) or 1.0
+    return {k: v * target / tot for k, v in probs.items()}
+
+
+# (sim stage key, Polymarket market_type, teams reaching the stage, display label, rows to show)
+_FUTURES_STAGES = [
+    ("win_cup",   "winner_outright", 1,  "Win World Cup",        18),
+    ("reach_sf",  "advance_sf",      4,  "Reach Semi-final",     12),
+    ("reach_qf",  "advance_qf",      8,  "Reach Quarter-final",  12),
+    ("reach_r16", "advance_r16",     16, "Reach Round of 16",    16),
+]
+
+
+def _compute_futures(markets: list[Market], model, results: list[dict] | None = None) -> dict:
+    """Market-led knockout futures board. The 12 group compositions are reconstructed from the free ESPN
+    results feed (no dependence on the now-closed group-winner markets); the qualifiers, bracket, and
+    deep-run/winner probabilities come from playing the tournament out thousands of times, conditioned on
+    every group game already decided. The HEADLINE per row is the de-vigged Polymarket price (the sharp,
+    vig-free probability); the model rides alongside as an openly-conservative second opinion (a simple
+    ratings model under-separates elite teams, so in the open knockout it systematically trails the market
+    on favorites, which is model caution rather than betting value). Runs on a thread (sim is a few sec)."""
+    live = _reconstruct_groups_from_results(results)
+    disk = _load_groups_disk()
+    disk = disk if _valid_field(disk) else {}     # ignore the old letter-keyed / malformed cache
+    counts = _team_game_counts(results)
+    knockouts_started = bool(counts) and max(counts.values()) > 3
+    if _field_complete(live, results):            # all 12 groups done -> final, freeze it
+        field = live
+        _save_groups_disk(field)
+    elif disk:                                    # trust the frozen field once group games age out
+        field = disk
+    elif not knockouts_started:                   # group stage in progress: no cross-group games yet
+        field = live
+    else:                                         # mid-knockout cold start, no good cache -> degrade
+        field = {}
+    covered = len(field)
+    market_by_type = {m.market_type: m for m in markets if m.market_type}
+    have_market = any(mt in market_by_type for _, mt, _, _, _ in _FUTURES_STAGES)
+    if covered < 12 or not model or not have_market:
+        return {"rows": [], "groups_covered": covered, "sims": 0, "games_locked": 0}
+
+    def lambdas(a, b):
+        return model.expected_goals(a, b)
+
+    def strength(t):
+        return model.attack.get(t, 1.0) - model.defense.get(t, 1.0)
+
+    field_teams = {t for ts in field.values() for t in ts}
+    played = _played_in_groups(results, field)
+    sim = tournament.simulate(field, lambdas, strength, played=played, n=config.TOURNAMENT_SIMS)
+
+    rows = []
+    for order, (simkey, mtype, target, label, topn) in enumerate(_FUTURES_STAGES):
+        m = market_by_type.get(mtype)
+        if not m:
+            continue
+        fair = _devig_market(m, target, field_teams)
+        for team, mk in sorted(fair.items(), key=lambda kv: -kv[1])[:topn]:
+            md = sim.get(team, {}).get(simkey)
+            if md is None:
+                continue
+            rows.append({"team": team, "kind": label, "_sort": (order, -mk),
+                         "market_pct": round(mk * 100, 1),     # de-vigged Polymarket - the headline
+                         "model_pct": round(md * 100, 1),      # conservative second opinion
+                         "gap_pp": round((md - mk) * 100, 1)}) # model minus market, shown neutral
+    rows.sort(key=lambda r: r["_sort"])
+    for r in rows:
+        r.pop("_sort", None)
+    return {"rows": rows, "groups_covered": covered, "sims": config.TOURNAMENT_SIMS,
+            "games_locked": len(played)}
+
+
+async def get_futures(markets: list[Market], model, results: list[dict] | None = None) -> dict:
+    """Cached tournament-sim board (recomputed at most every FUTURES_CACHE_TTL, off the event loop)."""
+    if not model:
+        return _futures_cache["data"]
+    now = time.monotonic()
+    if _futures_cache["ts"] and (now - _futures_cache["ts"]) < config.FUTURES_CACHE_TTL:
+        return _futures_cache["data"]
+    try:
+        data = await asyncio.to_thread(_compute_futures, markets, model, results)
+        _futures_cache.update(data=data, ts=now)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[aggregator] futures sim errored: {exc}")
+    return _futures_cache["data"]
+
+
+# --------------------------------------------------------------------------- #
 # Build the snapshot served to the dashboard
 # --------------------------------------------------------------------------- #
 async def build_snapshot(force: bool = False, refresh_odds: bool = False,
@@ -883,6 +1105,11 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     odds_meta["credits_low"] = (odds_meta["credits_remaining"] is not None
                                 and odds_meta["credits_remaining"] < config.ODDS_CREDIT_FLOOR)
     picks_board["corners"] = _corners_board(matchups, corner_rates, corner_lines, model)
+
+    # Futures: tournament sim (second opinion) vs the de-vigged Polymarket winner/group-winner line.
+    # Fetch results up front so the sim locks in already-played group games (cached, reused below).
+    results = await get_results(force=force)
+    picks_board["futures"] = await get_futures(markets, model, results)
 
     # AI reasoning — manual-trigger (reason=True) spends; otherwise reuse the disk cache
     bundles = picks_board.get("match_bundles", [])
@@ -926,7 +1153,6 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                          if r.get("ev", -9) >= config.CORNER_EDGE_MIN and r.get("confidence") != "prior"
                          for row in [_corner_paper_row(r)] if row])
     resolved = await get_resolved(force=force)
-    results = await get_results(force=force)
     settled_n = paper.settle_from_resolved(resolved)
     settled_p = paper.settle_parlays(results)
     settled_x = paper.settle_props(results)   # standalone goalscorer + team-total from ESPN

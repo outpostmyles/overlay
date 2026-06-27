@@ -64,6 +64,7 @@
       <button class="tab active" data-tab="picks"><svg class="ico"><use href="#i-picks"/></svg><span class="label">Best Bets</span></button>
       <button class="tab" data-tab="research"><svg class="ico"><use href="#i-analyze"/></svg><span class="label">Research</span></button>
       <button class="tab" data-tab="track"><svg class="ico"><use href="#i-track"/></svg><span class="label">Track Record</span></button>
+      <button class="tab" data-tab="futures"><svg class="ico"><use href="#i-markets"/></svg><span class="label">Futures</span></button>
 
       <div class="rail-foot">
         <span class="credits" id="odds-credits">no key</span>
@@ -90,6 +91,11 @@
         <div id="track-cal"></div>
         <div id="track-arch"></div>
         <div id="track-body"></div>
+      </section>
+
+      <section id="tab-futures" class="panel">
+        <p class="hint">The de-vigged Polymarket futures (vig-free probabilities to reach each knockout round and to win the cup) are the sharp, primary read. Alongside each, an independent Monte Carlo simulation of the bracket (the match model played out thousands of times, conditioned on every group result so far) rides as a <b>second opinion</b>. The model runs conservative in the open knockout, so read large gaps as model caution, not as edges to bet. The 12-group field is rebuilt from finished games, so it survives the group-winner markets closing.</p>
+        <div id="futures-body"></div>
       </section>
     </main>
   </div>

@@ -162,7 +162,7 @@ tbody tr { transition: background .12s; }
 tbody tr:hover td { background: rgba(139,123,255,.05); }
 tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 /* stacked-table panels: no sticky headers (they'd collide) */
-#tab-track thead th { position: static; }
+#tab-track thead th, #tab-futures thead th { position: static; }
 #track-arch table { margin-bottom: 16px; }
 .muted { color: var(--muted); }
 .num.pos, .ev.pos, .val.pos, .profit { color: var(--positive); }
