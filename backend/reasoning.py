@@ -64,7 +64,10 @@ desperate underdog, key injuries). Don't reflexively fade chalk because the mode
 
 Rules: `recommended_bets` = ONLY bets to actually place (each with a real, explainable reason) — never \
 put the same selection in both recommended_bets and fades; a leg that's only worth it inside the \
-parlay goes in `sgp_legs`, not recommended_bets. FADE popular props that look like traps. Be willing \
+parlay goes in `sgp_legs`, not recommended_bets. Each `selection` MUST be ONE auto-gradeable bet: a \
+single player and a single numeric line (e.g. 'Pedri Over 73.5 Passes Attempted', 'Kylian Mbappe \
+Anytime Goalscorer 0.5'); NEVER combine options with 'or' (no 'shots or shots-on-target', no 'Kane \
+shots or Saka shots') and never omit the line on a shots/SOT/passes prop. FADE popular props that look like traps. Be willing \
 to PASS (empty recommended_bets) — a confident "nothing here" beats a forced pick. Suggest an SGP \
 only when 2-3 legs genuinely reinforce. If the brief is missing or says 'unknown', say so and tell \
 the user to confirm lineups. NEVER invent injuries or news beyond the brief.

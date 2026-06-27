@@ -520,6 +520,8 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
                         mprob = pr["model_pct"] / 100.0
                 if mprob is None and arch == "team_total_over" and b.get("team_total_over_1_5_model_pct") is not None:
                     mprob = b["team_total_over_1_5_model_pct"] / 100.0
+            if _unsettleable_prop(arch, sel):
+                continue   # vague/compound prop the auto-grader can't resolve — don't log it at all
             rows.append({
                 "match": match, "archetype": arch, "selection": sel,
                 "confidence": v.get("confidence"), "commence_time": b.get("commence_time"),
@@ -530,6 +532,18 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
                 "stake_units": _stake_units(v.get("confidence")),
             })
     return rows
+
+
+def _unsettleable_prop(arch: str, sel: str) -> bool:
+    """A prop the auto-grader can never resolve: a compound 'A or B' selection (no single gradeable
+    outcome), or a shots/SOT/passes prop with no numeric line. Dropped at log time so the ledger does
+    not accrue picks that sit in Awaiting until the 3-day void."""
+    s = (sel or "").lower()
+    if " or " in s:                                              # "Kane or Saka", "shots or shots-on-target"
+        return True
+    if arch in ("shots_sot", "popular_prop") and not re.search(r"\d", s):   # no line to grade against
+        return True
+    return False
 
 
 _PASS_RE = re.compile(r"\b(pass|fade|avoid|no bet)\b")  # \bpass\b ignores "Passes Attempted"

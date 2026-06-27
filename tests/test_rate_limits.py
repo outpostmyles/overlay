@@ -102,6 +102,18 @@ def test_apifootball_empty_stats_cooldown(monkeypatch, tmp_path):
     assert players_calls == 1
 
 
+def test_unsettleable_prop_guard():
+    """Vague/compound props (no line, or 'A or B') are dropped at log time; valid ones pass."""
+    u = aggregator._unsettleable_prop
+    assert u("shots_sot", "Cody Gakpo shots or shots-on-target over") is True   # compound
+    assert u("shots_sot", "Kane shots over or Saka shots over") is True          # two players
+    assert u("shots_sot", "Pedri shots over") is True                            # no numeric line
+    assert u("shots_sot", "Pedri Over 2.5 Shots") is False                       # gradeable
+    assert u("popular_prop", "Lukaku Shots Over 3.0") is False
+    assert u("anytime_goalscorer", "Messi to score") is False                    # name-graded, no line needed
+    assert u("favorite_ml", "Belgium ML") is False
+
+
 def test_props_survive_restart_via_disk(monkeypatch, tmp_path):
     """A restart that lands during a PrizePicks block still serves the last-good board from disk."""
     import json, time as _t
