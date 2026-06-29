@@ -26,6 +26,22 @@ The heartbeat runs the **free path only** (`build_snapshot(force=True)` with `re
 tokens**. It is also gentler than the 60-second browser poll you already run with a tab open. The Odds and
 Analyze buttons stay manual, exactly as on your laptop.
 
+## Cost: zero by default
+
+The recommended server setup is **no API keys in `.env`** (the default state of `.env.example`). That gives
+a hard guarantee of $0 spend and still runs the full free core: the Model Ledger (the reason for an
+always-on host), the de-vigged Best Bets picks, the Futures bracket, and moneyline CLV all run on the free
+Polymarket / Kalshi / ESPN feeds. The keys only add optional polish that goes dormant without them:
+
+- `ANTHROPIC_API_KEY` blank: no AI match verdicts or per-prop "Read" commentary.
+- `ODDS_API_KEY` blank: no sportsbook best-price / EV line-shopping column (you keep the sharp fair line).
+- `APIFOOTBALL_KEY` blank: shots / passes / corner props do not auto-grade (moneyline and goalscorer still
+  grade for free).
+
+You can add any key to the server `.env` later and `systemctl restart overlay`. Note that even with the
+keys set, nothing on the 24/7 loop auto-spends: Anthropic and the Odds API only spend on a manual button
+press, and API-Football is the free tier. Leaving them blank is simply belt-and-suspenders.
+
 ## Setup
 
 ```bash
@@ -38,7 +54,8 @@ cd /opt && git clone https://github.com/outpostmyles/overlay.git overlay
 chown -R overlay:overlay /opt/overlay
 sudo -u overlay bash -c 'cd /opt/overlay && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt'
 
-# 3. Configure. Copy the template and turn the heartbeat ON (add any API keys you use):
+# 3. Configure. Copy the template and turn the heartbeat ON. Leave all the API keys BLANK (the template's
+#    default) for a guaranteed-free, fully-working server; you can add keys later if you want the extras.
 sudo -u overlay cp /opt/overlay/.env.example /opt/overlay/.env
 sudo -u overlay sed -i 's/^HEARTBEAT_ENABLED=.*/HEARTBEAT_ENABLED=true/' /opt/overlay/.env
 
