@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS forecasts (
     brier_model REAL, brier_market REAL,
     rps_model REAL, rps_market REAL,
     hit_model INTEGER,               -- model argmax == outcome
+    legs_json TEXT,                  -- extra market predictions (total/team goals, BTTS, corners), frozen + graded
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | locked | settled | void
     dedup_key TEXT UNIQUE
 );
@@ -106,6 +107,10 @@ def init_paper() -> None:
                 c.execute(f"ALTER TABLE paper_picks ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
                 pass  # column already exists
+        try:
+            c.execute("ALTER TABLE forecasts ADD COLUMN legs_json TEXT")
+        except sqlite3.OperationalError:
+            pass  # forecasts table predates the prediction-sheet legs
 
 
 def log_picks(rows: list[dict]) -> int:
@@ -676,20 +681,65 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
             cur = c.execute(
                 """UPDATE forecasts SET status='locked', lock_ts=?, kickoff_iso=?, model_cutoff=?,
                    model_a=?, model_draw=?, model_b=?, market_a=?, market_draw=?, market_b=?,
-                   market_sources=? WHERE id=? AND status='pending'""",
+                   market_sources=?, legs_json=? WHERE id=? AND status='pending'""",
                 (now_iso, b.get("kickoff_iso"), cutoff, m[0], m[1], m[2], k[0], k[1], k[2],
-                 b.get("sources"), r["id"]),
+                 b.get("sources"), json.dumps(b.get("legs") or []), r["id"]),
             )
             locked += cur.rowcount
     return locked
 
 
-def settle_forecasts(results: list[dict]) -> int:
-    """Grade LOCKED forecasts whose game has an ESPN result. actual_outcome comes from the 90+ET goals
-    dict, so a level knockout game grades as a DRAW (the model never claimed to call penalties; the
-    shootout is flagged in `pens`, not graded). Brier + RPS computed for both model and market against the
-    SAME outcome, so any reg/ET definitional noise hits both equally and the paired comparison stays fair.
-    Idempotent via the status='locked' guard."""
+def _ou_result(side: str, actual, line) -> str:
+    """Grade an over/under leg. Lines are .5 so a push never happens, but it is handled for safety."""
+    if actual is None or line is None:
+        return "pending"
+    if actual == line:
+        return "push"
+    over = actual > line
+    return "won" if ((side == "over") == over) else "lost"
+
+
+def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, corners_total) -> list[dict]:
+    """Grade each extra-market leg against the result. Goals markets settle off the ESPN score; the corners
+    leg settles only when an API-Football count is supplied (else it stays pending and can grade later)."""
+    out = []
+    for leg in legs:
+        k = leg.get("key")
+        side = leg.get("side")
+        line = leg.get("line")
+        actual, result = None, "pending"
+        if k == "total_goals":
+            actual = ga + gb
+            result = _ou_result(side, actual, line)
+        elif k == "team_total":
+            actual = ga if leg.get("team") == team_a else gb
+            result = _ou_result(side, actual, line)
+        elif k == "btts":
+            actual = "yes" if (ga > 0 and gb > 0) else "no"
+            result = "won" if side == actual else "lost"
+        elif k == "corners":
+            if corners_total is not None:
+                actual = corners_total
+                result = _ou_result(side, actual, line)
+        out.append({**leg, "actual": actual, "result": result})
+    return out
+
+
+def _corners_total_index(team_stats: dict | None) -> dict:
+    """{frozenset(team_keys): total corners} from the API-Football team-stats map (both teams must report)."""
+    idx: dict = {}
+    for (date, teams), d in (team_stats or {}).items():
+        vals = [(v or {}).get("corners") for v in d.values() if isinstance(v, dict)]
+        if vals and all(x is not None for x in vals):
+            idx[teams] = sum(vals)
+    return idx
+
+
+def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int:
+    """Grade forecasts whose game has an ESPN result. The 1X2 settles once (status locked -> settled):
+    actual_outcome comes from the 90+ET goals, so a level knockout grades as a DRAW (penalties are flagged
+    in `pens`, never graded). The extra-market legs grade alongside it, and a pending corners leg can fill
+    in on a later pass once API-Football posts the count. Returns the number of newly-settled games."""
     if not results:
         return 0
     idx: dict = {}
@@ -699,10 +749,11 @@ def settle_forecasts(results: list[dict]) -> int:
             idx[frozenset(ks)] = g           # knockout pairs are unique, so a team-pair key is enough
     if not idx:
         return 0
+    corners_idx = _corners_total_index(team_stats)
     settled = 0
     with _conn() as c:
         rows = c.execute(
-            "SELECT * FROM forecasts WHERE status='locked' "
+            "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
             "AND model_a IS NOT NULL AND market_a IS NOT NULL"
         ).fetchall()
         for r in rows:
@@ -712,20 +763,29 @@ def settle_forecasts(results: list[dict]) -> int:
             ga, gb = g["goals"].get(r["team_a"]), g["goals"].get(r["team_b"])
             if ga is None or gb is None:
                 continue
-            outcome = "a" if ga > gb else "b" if gb > ga else "draw"
-            oi = _OUTCOME_IDX[outcome]
-            pens = 1 if (outcome == "draw" and g.get("winner")) else 0
-            mp = (r["model_a"], r["model_draw"], r["model_b"])
-            kp = (r["market_a"], r["market_draw"], r["market_b"])
-            hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
-            c.execute(
-                """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
-                   pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?
-                   WHERE id=? AND status='locked'""",
-                (ga, gb, outcome, pens, _brier3(mp, oi), _brier3(kp, oi),
-                 _rps3(mp, oi), _rps3(kp, oi), hit, r["id"]),
-            )
-            settled += 1
+            try:
+                legs = json.loads(r["legs_json"]) if r["legs_json"] else []
+            except (TypeError, ValueError):
+                legs = []
+            graded = _grade_legs(legs, ga, gb, r["team_a"], r["team_b"],
+                                 corners_idx.get(frozenset((r["team_a"], r["team_b"]))))
+            if r["status"] == "locked":
+                outcome = "a" if ga > gb else "b" if gb > ga else "draw"
+                oi = _OUTCOME_IDX[outcome]
+                pens = 1 if (outcome == "draw" and g.get("winner")) else 0
+                mp = (r["model_a"], r["model_draw"], r["model_b"])
+                kp = (r["market_a"], r["market_draw"], r["market_b"])
+                hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
+                c.execute(
+                    """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
+                       pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?,
+                       legs_json=? WHERE id=? AND status='locked'""",
+                    (ga, gb, outcome, pens, _brier3(mp, oi), _brier3(kp, oi),
+                     _rps3(mp, oi), _rps3(kp, oi), hit, json.dumps(graded), r["id"]),
+                )
+                settled += 1
+            elif graded != legs:                 # already settled: only rewrite if a leg newly graded
+                c.execute("UPDATE forecasts SET legs_json=? WHERE id=?", (json.dumps(graded), r["id"]))
     return settled
 
 
@@ -736,7 +796,15 @@ def list_forecasts() -> list[dict]:
             "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
             "ORDER BY status='locked' DESC, commence_time DESC, id DESC"
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["legs"] = json.loads(r["legs_json"]) if r["legs_json"] else []
+        except (TypeError, ValueError):
+            d["legs"] = []
+        out.append(d)
+    return out
 
 
 def forecast_calibration() -> dict:

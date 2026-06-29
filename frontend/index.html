@@ -82,7 +82,7 @@
       </section>
 
       <section id="tab-ledger" class="panel">
-        <p class="hint">A pre-kickoff <b>1X2 forecast</b> for every game, frozen ~75 minutes before kickoff (before lineups leak), with the de-vigged market line frozen at the same instant as the benchmark. After the game, both are graded against the result. This grades the <b>model</b> on calibration, not your bets on CLV: the one question it answers is whether the model adds anything over the sharp market. Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw). Small sample, exploratory: aggregates stay hidden until enough games settle, and this should never be used to retune the model.</p>
+        <p class="hint">A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (before lineups leak): the model's call on the match result plus total goals, each team's goals, both-teams-to-score, and total corners, with the de-vigged market line on the 1X2 frozen at the same instant as the benchmark. After the game every line is graded against the result, right or wrong. The 1X2 also scores the <b>model</b> against the market on calibration (does it add anything over the sharp line). Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw); corners grade only with an API-Football key. Small sample, exploratory: the model-vs-market aggregate stays hidden until enough games settle, and none of this should be used to retune the model.</p>
         <div id="ledger-body"></div>
       </section>
 

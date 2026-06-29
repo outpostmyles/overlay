@@ -290,8 +290,33 @@ def _parse_iso(s: str | None) -> datetime | None:
         return None
 
 
+def _predict_legs(model, corner_rates, a: str, b: str) -> list[dict]:
+    """The model's pick on each extra market for a game: total goals, each team's goals, and both-teams-to-
+    score all come from one Dixon-Coles scoreline matrix (so they are mutually consistent); corners come
+    from the separate corners model. Each leg carries our side, the line, our confidence, and the projected
+    number. Graded later in paper.settle_forecasts (corners only when an API-Football key supplies counts)."""
+    legs: list[dict] = []
+    mk = model.market_probs(a, b, config.FORECAST_TOTAL_LINE, config.FORECAST_TEAM_LINE) if model else None
+    if mk:
+        def ou(p, line, proj, key, team=None):
+            return {"key": key, "side": "over" if p >= 0.5 else "under", "line": line, "team": team,
+                    "prob": round(max(p, 1 - p), 3), "proj": round(proj, 2)}
+        legs.append(ou(mk["total_over"], mk["total_line"], mk["exp_a"] + mk["exp_b"], "total_goals"))
+        legs.append(ou(mk["a_over"], mk["team_line"], mk["exp_a"], "team_total", team=a))
+        legs.append(ou(mk["b_over"], mk["team_line"], mk["exp_b"], "team_total", team=b))
+        legs.append({"key": "btts", "side": "yes" if mk["btts"] >= 0.5 else "no", "line": None,
+                     "team": None, "prob": round(max(mk["btts"], 1 - mk["btts"]), 3), "proj": None})
+    if corner_rates is not None:
+        _, _, tot = corners.project_total(a, b, corner_rates)
+        line = config.FORECAST_CORNERS_LINE
+        p = corners.over_prob(tot, line)
+        legs.append({"key": "corners", "side": "over" if p >= 0.5 else "under", "line": line,
+                     "team": None, "prob": round(max(p, 1 - p), 3), "proj": round(tot, 1)})
+    return legs
+
+
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
-                    now: datetime) -> tuple[list[dict], dict]:
+                    now: datetime, corner_rates=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -339,6 +364,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)),
             "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
             "sources": sources,
+            "legs": _predict_legs(model, corner_rates, a, b),
         }
     return cands, board
 
@@ -1328,6 +1354,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # Futures: tournament sim (second opinion) vs the de-vigged Polymarket winner/group-winner line.
     # Fetch results up front so the sim locks in already-played group games (cached, reused below).
     results = await get_results(force=force)
+    team_stats = await get_team_stats(results)   # corner counts: corner-bet settle AND forecast-leg grading
     _fb = await get_futures(markets, model, results)
     # settle logged leans (capture the moving close + resolve decided stages) then attach them fresh each
     # snapshot, outside the cached sim, so a just-logged lean shows immediately with current drift/CLV.
@@ -1349,18 +1376,19 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                              and len((m.commence_time or "").replace("-", "")) >= 8})
             fkicks = await get_kickoffs(fdates)
             fcands, fboard = _forecast_board(markets, model, fkicks,
-                                             config.FORECAST_LOCK_BUFFER_MINUTES, now_utc)
+                                             config.FORECAST_LOCK_BUFFER_MINUTES, now_utc, corner_rates)
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            paper.settle_forecasts(results)
+            paper.settle_forecasts(results, team_stats)
             rows = paper.list_forecasts()                   # frozen (locked) + graded (settled)
             frozen = {r["dedup_key"] for r in rows}
-            # live preview of games not yet frozen: the model's CURRENT line, shown so the slate isn't
-            # empty before the lock, explicitly NOT part of the graded record (it freezes ~75 min pre-KO).
+            # live preview of games not yet frozen: the model's CURRENT line + leg picks, shown so the slate
+            # isn't empty before the lock, explicitly NOT part of the graded record (it freezes ~75 min pre-KO).
             upcoming = [{**c, "model": fboard[c["dedup_key"]]["model"],
                          "market": fboard[c["dedup_key"]]["market"],
                          "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
-                         "sources": fboard[c["dedup_key"]]["sources"]}
+                         "sources": fboard[c["dedup_key"]]["sources"],
+                         "legs": fboard[c["dedup_key"]]["legs"]}
                         for c in fcands
                         if c["dedup_key"] not in frozen and not fboard[c["dedup_key"]]["missed"]]
             upcoming.sort(key=lambda c: (c.get("kickoff_iso") or "9999"))
@@ -1420,7 +1448,6 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     finished |= {(r["date"], r["team_key"]) for r in resolved
                  if r.get("date") and r.get("team_key") != "draw"}
     paper.mark_finished(finished)
-    team_stats = await get_team_stats(results)                         # corners (rates + settlement)
     settled_pp = paper.settle_player_props(await get_player_stats())   # shots/SOT/passes (API-Football)
     settled_c = paper.settle_corners(team_stats)                       # total corners (API-Football)
     voided = paper.expire_ungradable(config.UNGRADABLE_VOID_DAYS)      # void any still-ungradable leftovers

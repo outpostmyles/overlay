@@ -118,6 +118,46 @@ function _triBar(p, a, b) {
     + `<i class="t-d" style="width:${w(p[1])}%" title="draw ${Math.round(p[1] * 100)}%"></i>`
     + `<i class="t-b" style="width:${w(p[2])}%" title="${esc(teamName(b))} win ${Math.round(p[2] * 100)}%"></i></span>`;
 }
+// the model's pick on each extra market, as a compact chip
+function _legLabel(l) {
+  const t = l.team ? teamName(l.team) + " " : "";
+  if (l.key === "total_goals") return `Total ${l.side === "over" ? "O" : "U"}${l.line}`;
+  if (l.key === "team_total") return `${t}${l.side === "over" ? "O" : "U"}${l.line}`;
+  if (l.key === "btts") return `BTTS ${l.side === "yes" ? "Yes" : "No"}`;
+  if (l.key === "corners") return `Corners ${l.side === "over" ? "O" : "U"}${l.line}`;
+  return l.key;
+}
+function _legTitle(l, graded) {
+  const bits = [];
+  if (l.proj != null) bits.push(`model projects ${l.proj}`);
+  if (graded) bits.push(l.result === "pending" ? "awaiting data" : `actual ${l.actual} (${l.result})`);
+  else bits.push(`${Math.round((l.prob || 0) * 100)}% confidence`);
+  return bits.join("; ");
+}
+function _legChips(legs, graded) {
+  if (!legs || !legs.length) return "";
+  const chips = legs.map((l) => {
+    const r = l.result;
+    const cls = graded ? (r === "won" ? "leg-won" : r === "lost" ? "leg-lost" : "leg-pend") : "";
+    const tail = graded ? (r === "won" ? " ✓" : r === "lost" ? " ✗" : " ·")
+      : ` <span class="legpct">${Math.round((l.prob || 0) * 100)}%</span>`;
+    return `<span class="leg ${cls}" title="${esc(_legTitle(l, graded))}">${esc(_legLabel(l))}${tail}</span>`;
+  }).join("");
+  return `<div class="legs">${chips}</div>`;
+}
+// per-market hit rate across settled games (only counts legs that actually graded)
+function _legAccuracy(settled) {
+  const names = { total_goals: "Total goals", team_total: "Team totals", btts: "BTTS", corners: "Corners" };
+  const tally = {};
+  settled.forEach((r) => (r.legs || []).forEach((l) => {
+    if (l.result !== "won" && l.result !== "lost") return;
+    const t = tally[l.key] || (tally[l.key] = { w: 0, n: 0 });
+    t.n++; if (l.result === "won") t.w++;
+  }));
+  const cells = ["total_goals", "team_total", "btts", "corners"].filter((k) => tally[k])
+    .map((k) => `<span class="leg-acc"><b>${names[k]}</b> ${tally[k].w}/${tally[k].n}</span>`);
+  return cells.length ? `<div class="cal-note muted">Our picks vs result: ${cells.join(" · ")}</div>` : "";
+}
 function _forecastCard(c) {
   const badge = c.frozen
     ? `<span class="tag pin" title="frozen ${esc(c.lock_ts || "")}">locked</span>`
@@ -130,6 +170,7 @@ function _forecastCard(c) {
     <div class="fcard-leg muted"><span>${esc(teamName(c.a))}</span><span>Draw</span><span>${esc(teamName(c.b))}</span></div>
     <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>
     <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
+    ${_legChips(c.legs, false)}
   </div>`;
 }
 function _ledgerScore(s) {
@@ -155,10 +196,10 @@ function renderLedger() {
   if (!ml) { box.innerHTML = `<div class="muted" style="padding:14px">The Model Ledger fills in as the knockout games approach.</div>`; return; }
   const rows = ml.rows || [];
   const locked = rows.filter((r) => r.status === "locked").map((r) => ({
-    a: r.team_a, b: r.team_b, model: [r.model_a, r.model_draw, r.model_b],
+    a: r.team_a, b: r.team_b, model: [r.model_a, r.model_draw, r.model_b], legs: r.legs,
     market: [r.market_a, r.market_draw, r.market_b], kickoff_iso: r.kickoff_iso, frozen: true, lock_ts: r.lock_ts }));
   const upcoming = (ml.upcoming || []).map((c) => ({
-    a: c.team_a, b: c.team_b, model: c.model, market: c.market, kickoff_iso: c.kickoff_iso, frozen: false }));
+    a: c.team_a, b: c.team_b, model: c.model, market: c.market, legs: c.legs, kickoff_iso: c.kickoff_iso, frozen: false }));
   const settled = rows.filter((r) => r.status === "settled");
   const cards = locked.concat(upcoming);
   const cardHtml = cards.length
@@ -172,15 +213,18 @@ function renderLedger() {
       const oc = r.actual_outcome === "a" ? r.team_a : r.actual_outcome === "b" ? r.team_b : "Draw";
       const score = `${r.actual_a}-${r.actual_b}${r.pens ? " (pens)" : ""}`;
       const better = r.brier_model < r.brier_market;
+      const legsRow = (r.legs && r.legs.length)
+        ? `<tr class="legrow"><td colspan="6">${_legChips(r.legs, true)}</td></tr>` : "";
       return `<tr>
         <td><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b><div class="muted tiny">${esc((r.commence_time || "").slice(0, 10))}</div></td>
         <td>${_triBar(m, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(m)}</div></td>
         <td>${_triBar(k, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(k)}</div></td>
         <td><b>${esc(score)}</b><div class="muted tiny">${esc(r.actual_outcome === "draw" ? "draw" : teamName(oc) + " win")}</div></td>
         <td class="num ${better ? "flow-up" : "flow-dn"}">${r2(r.brier_model)}<span class="muted"> / ${r2(r.brier_market)}</span></td>
-        <td class="num">${r.hit_model ? "✓" : "✗"}</td></tr>`;
+        <td class="num">${r.hit_model ? "✓" : "✗"}</td></tr>${legsRow}`;
     };
-    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· model 1X2 vs the market line frozen at the same instant, scored on the result (lower Brier is better; green = model beat the market that game)</span></h3>
+    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· the 1X2 row scores the model vs the market frozen at the same instant (lower Brier is better, green = model beat the market); the chips under each game are our pick on every other line, marked right or wrong</span></h3>
+      ${_legAccuracy(settled)}
       <table class="lg-tbl"><thead><tr><th>Game</th><th>Model</th><th>Market</th><th>Result</th><th class="num">Brier m/mkt</th><th class="num">Hit</th></tr></thead><tbody>${settled.map(row).join("")}</tbody></table></div>`;
   }
   const empty = (!cards.length && !settled.length)

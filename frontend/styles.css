@@ -468,6 +468,17 @@ input::placeholder { color: var(--muted); }
 .lg-tbl td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; font-size: 12.5px; }
 .lg-tbl td .tribar { min-width: 90px; margin-bottom: 2px; }
 .lg-tbl td.num { font-family: var(--font-mono); font-size: 11.5px; text-align: right; white-space: nowrap; }
+/* prediction-sheet legs: the model's pick on each extra market */
+.legs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.fcard .legs { padding-top: 7px; border-top: 1px solid rgba(255,255,255,.05); }
+.leg { font: 11px var(--font-ui); color: var(--muted); background: var(--surface3); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; white-space: nowrap; }
+.leg .legpct { font-family: var(--font-mono); font-size: 10px; color: var(--text); opacity: .8; }
+.leg.leg-won { background: rgba(61,214,140,.13); border-color: rgba(61,214,140,.3); color: var(--positive); }
+.leg.leg-lost { background: rgba(240,101,91,.12); border-color: rgba(240,101,91,.28); color: var(--negative); }
+.leg.leg-pend { opacity: .6; }
+.legrow td { padding-top: 0 !important; border-bottom: 1px solid rgba(255,255,255,.04); }
+.leg-acc { font-size: 11.5px; margin-right: 2px; }
+.leg-acc b { color: var(--text); }
 
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {

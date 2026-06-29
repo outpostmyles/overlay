@@ -86,6 +86,10 @@ FORECAST_LOCK_BUFFER_MINUTES = 75            # lock at kickoff - 75 min, BEFORE 
                                              # out) so a forecast can never absorb team news
 FORECAST_MIN_N = 8                           # hide aggregate Brier/skill until this many settle (small KO
                                              # sample); raw rows always show, with a wide-CI caveat
+# Lines for the per-game prediction sheet (the extra markets the model simulates alongside the 1X2).
+FORECAST_TOTAL_LINE = 2.5                     # total match goals over/under
+FORECAST_TEAM_LINE = 1.5                      # each team's goals over/under
+FORECAST_CORNERS_LINE = 9.5                   # total corners over/under (graded only with an API-Football key)
 
 # --- Server-side refresh heartbeat (for an always-on deployment) ---
 # When the app runs headless on a server (no browser polling /api/snapshot), this in-process tick keeps

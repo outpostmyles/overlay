@@ -25,9 +25,9 @@ def _cand(a, b, date):
 
 
 def _board(key, *, lock_now=False, missed=False, ko="2026-07-04T19:00Z",
-           model=(0.55, 0.27, 0.18), market=(0.50, 0.30, 0.20)):
+           model=(0.55, 0.27, 0.18), market=(0.50, 0.30, 0.20), legs=None):
     return {key: {"lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
-                  "model": model, "market": market, "sources": "kalshi"}}
+                  "model": model, "market": market, "sources": "kalshi", "legs": legs or []}}
 
 
 # --- scoring math --------------------------------------------------------- #
@@ -129,6 +129,67 @@ def test_decisive_result_grades_the_winner():
 
 
 # --- aggregate gating ----------------------------------------------------- #
+# --- prediction sheet: the extra-market legs ------------------------------ #
+def test_market_probs_consistent_with_match_probs():
+    from backend.model import ratings
+    m = ratings.MatchModel({"x": 1.3, "y": 0.9}, {"x": 0.95, "y": 1.1}, 1.35)
+    mp = m.match_probs("x", "y")
+    mk = m.market_probs("x", "y")
+    # the 1X2 derived in market_probs must equal match_probs (same DC-corrected matrix)
+    assert abs(mp["x"] - mk["home"]) < 1e-9
+    assert abs(mp["draw"] - mk["draw"]) < 1e-9
+    assert abs(mp["y"] - mk["away"]) < 1e-9
+    for k in ("total_over", "a_over", "b_over", "btts"):
+        assert 0.0 <= mk[k] <= 1.0
+    # a higher-scoring matchup must have a higher P(over 2.5)
+    hi = ratings.MatchModel({"x": 1.8, "y": 1.7}, {"x": 1.2, "y": 1.2}, 1.6)
+    assert hi.market_probs("x", "y")["total_over"] > mk["total_over"]
+
+
+def _legs():
+    return [
+        {"key": "total_goals", "side": "over", "line": 2.5, "team": None, "prob": 0.60, "proj": 2.8},
+        {"key": "team_total", "side": "under", "line": 1.5, "team": "japan", "prob": 0.62, "proj": 0.9},
+        {"key": "btts", "side": "no", "line": None, "team": None, "prob": 0.55, "proj": None},
+        {"key": "corners", "side": "over", "line": 9.5, "team": None, "prob": 0.55, "proj": 10.0},
+    ]
+
+
+def test_legs_grade_against_the_result():
+    paper = _fresh_paper()
+    key = "fc|2026-07-04|brazil|japan"
+    paper.log_forecasts([_cand("brazil", "japan", "2026-07-04")], today="2026-06-29")
+    paper.lock_forecasts(_board(key, lock_now=True, legs=_legs()), "2026-07-04T17:45:00Z")
+    # Brazil 3-0 Japan (3 total goals, Japan blanked), 8 corners
+    results = [{"date": "2026-07-04", "goals": {"brazil": 3, "japan": 0}, "winner": "brazil"}]
+    stats = {("2026-07-04", frozenset({"brazil", "japan"})): {"brazil": {"corners": 5}, "japan": {"corners": 3}}}
+    paper.settle_forecasts(results, stats)
+    legs = {l["key"] + (l.get("team") or ""): l for l in paper.list_forecasts()[0]["legs"]}
+    assert legs["total_goals"]["result"] == "won"        # 3 > 2.5, picked over
+    assert legs["team_totaljapan"]["result"] == "won"    # Japan 0 < 1.5, picked under
+    assert legs["btts"]["result"] == "won"               # Japan didn't score -> No -> correct
+    assert legs["corners"]["result"] == "lost"           # 8 < 9.5, picked over
+    os.unlink(config.DB_PATH)
+
+
+def test_corners_leg_fills_in_after_settlement():
+    paper = _fresh_paper()
+    key = "fc|2026-07-04|brazil|japan"
+    paper.log_forecasts([_cand("brazil", "japan", "2026-07-04")], today="2026-06-29")
+    paper.lock_forecasts(_board(key, lock_now=True, legs=_legs()), "2026-07-04T17:45:00Z")
+    results = [{"date": "2026-07-04", "goals": {"brazil": 3, "japan": 0}, "winner": "brazil"}]
+    # first pass: no corner data (e.g. keyless host) -> goals legs grade, corners stays pending
+    assert paper.settle_forecasts(results, None) == 1
+    corners = next(l for l in paper.list_forecasts()[0]["legs"] if l["key"] == "corners")
+    assert corners["result"] == "pending"
+    # later pass: API-Football posts the count -> corners fills, no game re-counted as newly settled
+    stats = {("2026-07-04", frozenset({"brazil", "japan"})): {"brazil": {"corners": 7}, "japan": {"corners": 4}}}
+    assert paper.settle_forecasts(results, stats) == 0
+    corners = next(l for l in paper.list_forecasts()[0]["legs"] if l["key"] == "corners")
+    assert corners["result"] == "won" and corners["actual"] == 11   # 11 > 9.5, picked over
+    os.unlink(config.DB_PATH)
+
+
 def test_aggregate_scores_are_gated_until_min_n():
     paper = _fresh_paper()
     config.FORECAST_MIN_N = 3

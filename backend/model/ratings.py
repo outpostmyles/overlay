@@ -84,6 +84,46 @@ class MatchModel:
             return None
         return {a: p_home / total, "draw": p_draw / total, b: p_away / total}
 
+    def market_probs(self, a: str, b: str, total_line: float = 2.5,
+                     team_line: float = 1.5) -> dict | None:
+        """Every goals-based market for (a, b), derived from ONE Dixon-Coles-corrected scoreline matrix
+        so they are mutually consistent (the 1X2 here equals match_probs). Returns probabilities for the
+        home/draw/away result, total goals over `total_line`, each team over `team_line`, and both teams
+        to score, plus each side's expected goals. None if either team is unknown to the model."""
+        lam = self._lambdas(a, b)
+        if not lam:
+            return None
+        la, lb = lam
+        pa = [_poisson(i, la) for i in range(MAX_GOALS + 1)]
+        pb = [_poisson(j, lb) for j in range(MAX_GOALS + 1)]
+        home = draw = away = tot_over = a_over = b_over = btts = norm = 0.0
+        for i in range(MAX_GOALS + 1):
+            for j in range(MAX_GOALS + 1):
+                p = pa[i] * pb[j] * _dc_tau(i, j, la, lb, DC_RHO)
+                norm += p
+                if i > j:
+                    home += p
+                elif i == j:
+                    draw += p
+                else:
+                    away += p
+                if i + j > total_line:
+                    tot_over += p
+                if i > team_line:
+                    a_over += p
+                if j > team_line:
+                    b_over += p
+                if i > 0 and j > 0:
+                    btts += p
+        if norm <= 0:
+            return None
+        return {
+            "home": home / norm, "draw": draw / norm, "away": away / norm,
+            "total_over": tot_over / norm, "a_over": a_over / norm,
+            "b_over": b_over / norm, "btts": btts / norm,
+            "exp_a": la, "exp_b": lb, "total_line": total_line, "team_line": team_line,
+        }
+
 
 def _poisson(k: int, lam: float) -> float:
     return math.exp(-lam) * lam ** k / math.factorial(k)
