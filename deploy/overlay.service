@@ -8,6 +8,9 @@ Type=simple
 User=overlay
 WorkingDirectory=/opt/overlay
 # WorkingDirectory must be the repo root so the app finds .env, poly.db, and the JSON caches.
+Environment=PYTHONUNBUFFERED=1
+# PYTHONUNBUFFERED flushes the app's heartbeat/aggregator print() lines to the journal in real time
+# (otherwise Python block-buffers stdout under systemd and the operational logs look empty).
 ExecStart=/opt/overlay/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
