@@ -120,6 +120,9 @@ All API keys are optional. With none set, the app runs fully on the free predict
 - `BANKROLL` - bankroll used for unit and Kelly sizing
 - `UNIT_PCT` - one unit as a fraction of bankroll
 
+### Running it always-on
+On a laptop the data refreshes only while a browser tab is open and polling. The Model Ledger needs the app up around the clock (to lock each forecast before kickoff and settle finished games on its own), so for a persistent deployment set `HEARTBEAT_ENABLED=true` to enable an in-process refresh tick that runs the free-feed path on a timer (it never spends Odds credits or Anthropic tokens). See `DEPLOY.md` for a copy-paste DigitalOcean Droplet setup with a systemd unit (`deploy/overlay.service`).
+
 ## Status
 
 Working and in active personal use:

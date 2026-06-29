@@ -1,0 +1,17 @@
+[Unit]
+Description=Overlay - World Cup betting research dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=overlay
+WorkingDirectory=/opt/overlay
+# WorkingDirectory must be the repo root so the app finds .env, poly.db, and the JSON caches.
+ExecStart=/opt/overlay/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+# Keep it bound to localhost (above). Reach it over an SSH tunnel or put nginx in front (see DEPLOY.md).
+
+[Install]
+WantedBy=multi-user.target

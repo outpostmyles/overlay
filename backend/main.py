@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,10 +15,45 @@ from .store import leans, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
+_heartbeat_task: asyncio.Task | None = None
+
 
 @app.on_event("startup")
 def _startup() -> None:
     paper.init_paper()
+
+
+@app.on_event("startup")
+async def _start_heartbeat() -> None:
+    """On an always-on host the browser is not there to poll /api/snapshot, so nothing would refresh the
+    data. This in-process tick does it instead, on the FREE-feed path only, so the Model Ledger locks each
+    forecast before kickoff and settles finished games without anyone watching. Off unless HEARTBEAT_ENABLED
+    is set (so it never runs during local laptop use or tests). See DEPLOY.md."""
+    global _heartbeat_task
+    if not config.HEARTBEAT_ENABLED or _heartbeat_task is not None:
+        return
+    _heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    print(f"[heartbeat] enabled, refreshing free feeds every {config.HEARTBEAT_INTERVAL_SECONDS}s")
+
+
+async def _heartbeat_loop() -> None:
+    interval = max(60, config.HEARTBEAT_INTERVAL_SECONDS)
+    await asyncio.sleep(5)        # let startup settle before the first refresh
+    while True:
+        try:
+            # force=True re-pulls the free feeds ONLY; refresh_odds/reason stay False so no money is spent
+            await aggregator.build_snapshot(force=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 (never let one bad cycle kill the loop)
+            print(f"[heartbeat] refresh failed: {exc}")
+        await asyncio.sleep(interval)
+
+
+@app.on_event("shutdown")
+async def _stop_heartbeat() -> None:
+    if _heartbeat_task:
+        _heartbeat_task.cancel()
 
 
 @app.get("/api/health")

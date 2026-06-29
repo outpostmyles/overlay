@@ -87,6 +87,15 @@ FORECAST_LOCK_BUFFER_MINUTES = 75            # lock at kickoff - 75 min, BEFORE 
 FORECAST_MIN_N = 8                           # hide aggregate Brier/skill until this many settle (small KO
                                              # sample); raw rows always show, with a wide-CI caveat
 
+# --- Server-side refresh heartbeat (for an always-on deployment) ---
+# When the app runs headless on a server (no browser polling /api/snapshot), this in-process tick keeps
+# data fresh so the Model Ledger locks forecasts before kickoff and settles finished games on its own. It
+# runs the FREE-feed path only (force refresh, never refresh_odds or reason), so it cannot spend Odds
+# credits or Anthropic tokens, and it is gentler than the 60s browser poll. Off by default; set
+# HEARTBEAT_ENABLED=true in .env on the deployed host. See DEPLOY.md.
+HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "300") or 300)
+
 # --- AI reasoning (manual-trigger, disk-cached — never on the auto-refresh) ---
 REASONING_MAX_MATCHES = 10                   # cap matches reasoned per run (cost control)
 REASONING_CACHE_PATH = ROOT / "poly_reasoning_cache.json"
