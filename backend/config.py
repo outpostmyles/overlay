@@ -121,7 +121,9 @@ def has_apifootball() -> bool:
 
 
 # --- Settlement windows ---
-RESULTS_WINDOW_DAYS = 14       # how far back to pull ESPN finished games for grading parlays/props
+RESULTS_WINDOW_DAYS = 40       # cover the whole tournament: grading parlays/props AND letting the
+                               # futures tab rebuild all 12 group comps from finished games deep into
+                               # the knockouts (early group games must not age out). ESPN is free/uncapped.
 UNGRADABLE_VOID_DAYS = 3       # void (stake-neutral) un-auto-gradable props (shots/passes) this many
                                # days after their game finished, so Awaiting stops accumulating
 
