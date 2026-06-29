@@ -6,11 +6,17 @@ Prices are in cents (0-100) == probability * 100.
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from .. import config
 from ..matching import kalshi_ticker_date, normalize_team
 from ..models import Market, Quote, Selection
+
+# knockout games are listed as regulation-time markets ("Reg Time: Germany"); strip the wrapper from
+# the display label so cards read "Germany", not "Reg Time: Germany"
+_REG_TIME = re.compile(r"\breg(?:ular|ulation)?\.?\s*time\b\s*:?\s*", re.IGNORECASE)
 
 # series_ticker -> (market_type, group)
 # v1 covers the cleanly-comparable markets: 3-way moneyline + tournament winner.
@@ -71,8 +77,8 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
             selections: list[Selection] = []
             title = ""
             for m in children:
-                label = m.get("yes_sub_title") or m.get("title") or ""
-                title = (m.get("title") or title).replace(" Winner?", "").strip()
+                label = _REG_TIME.sub("", m.get("yes_sub_title") or m.get("title") or "").strip()
+                title = _REG_TIME.sub("", (m.get("title") or title)).replace(" Winner?", "").strip()
                 ask = _prob(m.get("yes_ask_dollars"))
                 bid = _prob(m.get("yes_bid_dollars"))
                 last = _prob(m.get("last_price_dollars"))

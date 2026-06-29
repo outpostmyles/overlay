@@ -43,6 +43,10 @@ def normalize_team(name: str | None) -> str:
     s = s.replace("-", " ").replace("&", " and ")   # "Bosnia-Herzegovina"/"X & Y" → spaced
     s = re.sub(r"[^a-z0-9 ]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
+    # knockout markets wrap each pick in regulation-time wording ("Reg. Time Argentina", "Reg Time
+    # Tie") - strip it so the selection still normalizes to the team (or to a draw)
+    s = re.sub(r"\b(reg|regular|regulation) time\b", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
     if s in DRAW_KEYS:
         return "draw"
     return ALIASES.get(s, s)
