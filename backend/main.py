@@ -54,6 +54,12 @@ async def remove_lean_ep(lean_id: str) -> dict:
     return {"removed": leans.remove(lean_id)}
 
 
+@app.post("/api/futures/scenario")
+async def futures_scenario_ep(payload: dict) -> dict:
+    """What-if: pin knockout ties ([{a,b,winner}]) and get how the model's deep-run odds shift."""
+    return await aggregator.futures_scenario(payload.get("pins") or [])
+
+
 @app.get("/api/snapshot")
 async def snapshot(force: bool = False, refresh_odds: bool = False,
                    reason: bool = False) -> JSONResponse:

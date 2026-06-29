@@ -1173,6 +1173,55 @@ async def get_futures(markets: list[Market], model, results: list[dict] | None =
     return _futures_cache["data"]
 
 
+def _scenario_deltas(field: dict, model, decided: dict, pins: list[dict]) -> dict:
+    """Re-run the bracket sim with the user's pinned ties forced (added to the decided games), and return
+    how each team's deep-run odds move vs the no-pin baseline. The market can't be re-priced for a
+    hypothetical, so this is the MODEL's conditional view (which is what a simulation is for)."""
+    bracket = [t for pair in _BRACKET_R32 for t in pair]
+    field_teams = {t for ts in field.values() for t in ts}
+    if not all(t in field_teams for t in bracket):
+        return {"deltas": [], "pins": []}
+
+    def lambdas(a, b):
+        return model.expected_goals(a, b)
+
+    def strength(t):
+        return model.attack.get(t, 1.0) - model.defense.get(t, 1.0)
+
+    pinned = dict(decided)
+    used = []
+    for p in pins or []:
+        a, b, w = p.get("a"), p.get("b"), p.get("winner")
+        if a and b and w in (a, b) and frozenset((a, b)) not in decided:
+            pinned[frozenset((a, b))] = w
+            used.append({"a": a, "b": b, "winner": w})
+    base = tournament.simulate(field, lambdas, strength, bracket=bracket, ko_played=decided,
+                               n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
+    scen = tournament.simulate(field, lambdas, strength, bracket=bracket, ko_played=pinned,
+                               n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
+    deltas = []
+    for t in scen:
+        for stage, label in (("win_cup", "win cup"), ("reach_sf", "reach SF")):
+            b_, s_ = base[t][stage] * 100, scen[t][stage] * 100
+            if abs(s_ - b_) >= 1.5:
+                deltas.append({"team": t, "stage": label, "base": round(b_), "scen": round(s_),
+                               "delta": round(s_ - b_)})
+    deltas.sort(key=lambda d: -abs(d["delta"]))
+    return {"deltas": deltas[:14], "pins": used}
+
+
+async def futures_scenario(pins: list[dict]) -> dict:
+    """On-demand what-if: given pinned knockout ties, how do the model's deep-run odds shift. Off the
+    event loop (two sims). Free feeds are cached, so the fetches are hits."""
+    model = ratings.get_model()
+    field = _load_groups_disk()
+    if not model or not _valid_field(field):
+        return {"deltas": [], "pins": []}
+    results = await get_results()
+    decided = _knockout_winners(results, field)
+    return await asyncio.to_thread(_scenario_deltas, field, model, decided, pins)
+
+
 # --------------------------------------------------------------------------- #
 # Build the snapshot served to the dashboard
 # --------------------------------------------------------------------------- #

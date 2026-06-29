@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { snapshot: null, paper: null, tab: "picks", propIndex: {}, dayFilter: null, trackTab: "open" };
+const state = { snapshot: null, paper: null, tab: "picks", propIndex: {}, dayFilter: null, trackTab: "open", scenario: { pins: [], deltas: [] } };
 
 // ---------- helpers ----------
 const $ = (sel) => document.querySelector(sel);
@@ -123,7 +123,7 @@ function renderFutures() {
   const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
   const view = localStorage.getItem("overlay_futures_view") || "bracket";
   const toggle = `<span class="fview"><button class="act tiny ${view === "bracket" ? "on" : ""}" data-fview="bracket">Bracket</button><button class="act tiny ${view === "list" ? "on" : ""}" data-fview="list">List</button></span>`;
-  const main = view === "list" ? Object.keys(byKind).map(section).join("") : (bracketKeyReads(f.bracket) + renderBracket(f.bracket));
+  const main = view === "list" ? Object.keys(byKind).map(section).join("") : (bracketKeyReads(f.bracket) + renderScenario() + renderBracket(f.bracket));
   box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
     + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</div>`
     + notes + renderLeans(f.leans) + main;
@@ -168,18 +168,46 @@ function bracketKeyReads(br) {
   return `<div class="cal-note keyreads">${ico("analyze")}<div><b>Where the decisions are:</b> the closest ties and where our model disagrees with the sharp line (that is where your eye-test can add edge):<ul class="kr">${items}</ul></div></div>`;
 }
 
+function _isPinned(mu, team) {
+  return ((state.scenario && state.scenario.pins) || []).some((p) =>
+    p.winner === team && ((p.a === mu.a && p.b === mu.b) || (p.a === mu.b && p.b === mu.a)));
+}
+
+// scenario explorer: pin knockout ties and watch the model's deep-run odds shift (it can't re-price the
+// market, so this is the sim's conditional view).
+function renderScenario() {
+  const sc = state.scenario || {};
+  if (!sc.pins || !sc.pins.length) return "";
+  const chips = sc.pins.map((p) => {
+    const loser = p.winner === p.a ? p.b : p.a;
+    return `<span class="tag pin">${esc(teamName(p.winner))} over ${esc(teamName(loser))}<button class="pinx" data-pin-a="${esc(p.a)}" data-pin-b="${esc(p.b)}" data-pin-w="${esc(p.winner)}" title="remove">×</button></span>`;
+  }).join(" ");
+  const rows = (sc.deltas || []).map((d) => {
+    const c = d.delta > 0 ? "pos" : d.delta < 0 ? "neg" : "muted";
+    return `<tr><td><b>${esc(teamName(d.team))}</b></td><td class="muted">${esc(d.stage)}</td><td class="num">${d.base}% → ${d.scen}%</td><td class="num ${c}">${d.delta > 0 ? "+" : ""}${d.delta}pp</td></tr>`;
+  }).join("");
+  return `<div class="cal-note scen"><div style="flex:1"><b>Scenario:</b> ${chips} <button class="act tiny" data-scen-clear>clear</button>
+    <div class="muted" style="margin:3px 0">how the model's deep-run odds shift if these play out (the market can't be re-priced for a hypothetical, so this is the sim's conditional view):</div>
+    <table class="scen-tbl"><tbody>${rows || '<tr><td class="muted">no meaningful shifts</td></tr>'}</tbody></table></div></div>`;
+}
+
 function renderBracket(br) {
   if (!br || !br.rounds || !br.rounds.length) return `<div class="muted" style="padding:14px">The bracket fills in as the knockout markets price up.</div>`;
-  const teamCell = (team, pct, win) => team
-    ? `<div class="bteam ${win ? "bwin" : ""}"><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`
-    : `<div class="bteam tbd">TBD</div>`;
+  const teamCell = (team, pct, win, mu) => {
+    if (!team) return `<div class="bteam tbd">TBD</div>`;
+    const clickable = mu && !mu.winner && mu.a && mu.b;
+    const pinned = mu && _isPinned(mu, team);
+    const attrs = clickable ? ` data-pin-a="${esc(mu.a)}" data-pin-b="${esc(mu.b)}" data-pin-w="${esc(team)}"` : "";
+    return `<div class="bteam ${win ? "bwin" : ""} ${pinned ? "bpin" : ""} ${clickable ? "bclick" : ""}"${attrs}><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`;
+  };
   const match = (mu) => {
     const tie = mu.mkt_a == null ? "" : `<div class="btie">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
-    return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b)}${tie}</div>`;
+    return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a, mu)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b, mu)}${tie}</div>`;
   };
   const cols = br.rounds.map((r) => `<div class="bcol"><div class="bcol-h">${esc(r.name)}</div>${r.matchups.map(match).join("")}</div>`).join("");
   const champ = br.champion ? `<div class="bcol bcol-champ"><div class="bcol-h">Champion</div><div class="bmatch champ">${teamCell(br.champion, null, true)}</div></div>` : "";
-  return `<div class="bracket-wrap"><div class="bracket">${cols}${champ}</div></div>`;
+  const hint = `<div class="muted bhint">Tap a team in an undecided tie to pin them through and see the bracket shift.</div>`;
+  return `<div class="bracket-wrap"><div class="bracket">${cols}${champ}</div></div>${hint}`;
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }
 
@@ -721,8 +749,35 @@ document.addEventListener("click", async (e) => {
     return;
   }
   const fv = e.target.closest("[data-fview]");
-  if (fv) { localStorage.setItem("overlay_futures_view", fv.dataset.fview); renderFutures(); }
+  if (fv) { localStorage.setItem("overlay_futures_view", fv.dataset.fview); renderFutures(); return; }
+  const sc = e.target.closest("[data-scen-clear]");
+  if (sc) { state.scenario = { pins: [], deltas: [] }; renderFutures(); return; }
+  const pn = e.target.closest("[data-pin-w]");
+  if (pn) { toggleScenarioPin(pn.dataset.pinA, pn.dataset.pinB, pn.dataset.pinW); return; }
 });
+
+// pin a knockout tie's winner and ask the backend how the model's deep-run odds shift. The pin is a
+// hypothetical, so this only moves the model sim (the market can't be re-priced for a what-if).
+async function toggleScenarioPin(a, b, winner) {
+  if (!a || !b || !winner) return;
+  state.scenario = state.scenario || { pins: [], deltas: [] };
+  const same = (p) => (p.a === a && p.b === b) || (p.a === b && p.b === a);
+  const existing = state.scenario.pins.find(same);
+  if (existing && existing.winner === winner) {
+    state.scenario.pins = state.scenario.pins.filter((p) => !same(p));   // tap the pinned team again to clear
+  } else {
+    state.scenario.pins = state.scenario.pins.filter((p) => !same(p)).concat([{ a, b, winner }]);
+  }
+  renderFutures();   // optimistic: show the pin immediately, fill deltas when the sim returns
+  if (!state.scenario.pins.length) { state.scenario.deltas = []; renderFutures(); return; }
+  try {
+    const r = await getJSON("/api/futures/scenario", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pins: state.scenario.pins }) });
+    state.scenario.deltas = r.deltas || [];
+    state.scenario.pins = (r.pins && r.pins.length) ? r.pins : state.scenario.pins;   // backend drops pins it can't apply
+    renderFutures();
+  } catch (err) { /* keep the optimistic pin; deltas just stay empty */ }
+}
 
 // hide-chalk toggle (delegated; persists across re-renders via the body class)
 document.addEventListener("change", (e) => {
