@@ -10,25 +10,27 @@ echo "→ installing nginx..."
 apt-get update -qq
 apt-get install -y -qq nginx apache2-utils
 
-echo
-echo "Set the login for your dashboard (you'll type the password twice; it stays on the server)."
-read -rp "Choose a username: " OVERLAY_USER
-htpasswd -c /etc/nginx/.htpasswd "$OVERLAY_USER"      # prompts for the password, hidden
+# A login is OPTIONAL. Pass a username + password to require one:  setup-nginx.sh <user> <pass>
+# With no arguments the dashboard is public (no password) — simplest, fine for a personal tool.
+AUTH=""
+OVERLAY_USER="${1:-}"
+OVERLAY_PASS="${2:-}"
+if [ -n "$OVERLAY_USER" ] && [ -n "$OVERLAY_PASS" ]; then
+    htpasswd -bc /etc/nginx/.htpasswd "$OVERLAY_USER" "$OVERLAY_PASS"
+    AUTH=$'    auth_basic "Overlay";\n    auth_basic_user_file /etc/nginx/.htpasswd;'
+fi
 
-# Reverse proxy + basic auth. The single-quoted heredoc keeps $host/$remote_addr literal for nginx.
-cat > /etc/nginx/sites-available/overlay <<'NGINX'
+# Reverse proxy. Unquoted heredoc so ${AUTH} expands; \$host / \$remote_addr stay literal for nginx.
+cat > /etc/nginx/sites-available/overlay <<NGINX
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
-
-    auth_basic "Overlay";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-
+${AUTH}
     location / {
         proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 }
 NGINX
