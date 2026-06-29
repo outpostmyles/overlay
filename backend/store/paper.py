@@ -58,6 +58,38 @@ _MIGRATE = [("odds_type", "TEXT"), ("popularity", "INTEGER"),
             ("model_prob", "REAL")]
 
 
+# --- Model Ledger: pre-kickoff 1X2 forecasts, model vs market, graded on the result ----------- #
+# Separate table from the bet ledger: this grades the MODEL (calibration), not the user's bets (CLV).
+# Each row freezes the model's 1X2 AND the de-vigged market's 1X2 at the SAME instant (the lock), then
+# auto-grades both against the ESPN result. team_a/team_b are the two normalized keys in a canonical
+# (sorted) order; the model is neutral-venue so the slot assignment is arbitrary but consistent.
+_FORECAST_SCHEMA = """
+CREATE TABLE IF NOT EXISTS forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match TEXT NOT NULL,              -- display "Team A vs Team B"
+    team_a TEXT NOT NULL,             -- normalized key, slot A
+    team_b TEXT NOT NULL,             -- normalized key, slot B
+    commence_time TEXT,               -- game date (YYYY-MM-DD)
+    stage TEXT,                       -- round label if known
+    logged_at TEXT NOT NULL,          -- when the pending row was first created
+    lock_ts TEXT,                     -- when the forecast was frozen (NULL until locked)
+    model_cutoff TEXT,                -- model trained on results through this date (game excluded, it is future)
+    kickoff_iso TEXT,                 -- resolved real kickoff used for the lock buffer
+    model_a REAL, model_draw REAL, model_b REAL,    -- model 1X2, frozen at lock
+    market_a REAL, market_draw REAL, market_b REAL, -- de-vigged market 1X2, frozen at the SAME instant
+    market_sources TEXT,             -- which sharp sources fed the benchmark
+    actual_a INTEGER, actual_b INTEGER,  -- final goals (90+ET)
+    actual_outcome TEXT,             -- 'a' | 'draw' | 'b'
+    pens INTEGER DEFAULT 0,          -- level in 90+ET, decided on penalties (out of scope, flagged only)
+    brier_model REAL, brier_market REAL,
+    rps_model REAL, rps_market REAL,
+    hit_model INTEGER,               -- model argmax == outcome
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | locked | settled | void
+    dedup_key TEXT UNIQUE
+);
+"""
+
+
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -68,6 +100,7 @@ def init_paper() -> None:
     Path(config.DB_PATH).touch(exist_ok=True)
     with _conn() as c:
         c.executescript(_SCHEMA)
+        c.executescript(_FORECAST_SCHEMA)
         for col, typ in _MIGRATE:
             try:
                 c.execute(f"ALTER TABLE paper_picks ADD COLUMN {col} {typ}")
@@ -561,6 +594,176 @@ def model_calibration() -> dict:
         out[a] = {"n": d["n"], "mean_pred": round(mean_pred, 3), "hit_rate": round(hit, 3),
                   "gap_pp": round((mean_pred - hit) * 100, 1),   # +ve = model over-projects
                   "brier": round(d["brier"] / d["n"], 3)}
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Model Ledger: log -> lock -> settle a pre-kickoff 1X2 forecast vs the market
+# --------------------------------------------------------------------------- #
+_OUTCOME_IDX = {"a": 0, "draw": 1, "b": 2}
+
+
+def _brier3(p: tuple, idx: int) -> float:
+    """3-way Brier: sum (p_i - o_i)^2 over {a, draw, b}. 0 best, 2 worst, ~0.667 = a flat guess."""
+    o = [0.0, 0.0, 0.0]
+    o[idx] = 1.0
+    return round(sum((p[i] - o[i]) ** 2 for i in range(3)), 4)
+
+
+def _rps3(p: tuple, idx: int) -> float:
+    """Ranked probability score over the ORDERED outcomes {a-win, draw, b-win}: penalizes being far on
+    the ordinal scale (calling a blowout the wrong way costs more than missing a draw). 0 best, 1 worst."""
+    o = [0.0, 0.0, 0.0]
+    o[idx] = 1.0
+    cum_p = cum_o = s = 0.0
+    for i in range(2):                       # first r-1 = 2 cumulative steps
+        cum_p += p[i]
+        cum_o += o[i]
+        s += (cum_p - cum_o) ** 2
+    return round(s / 2.0, 4)
+
+
+def log_forecasts(candidates: list[dict], today: str) -> int:
+    """Insert a PENDING forecast row per upcoming game (probabilities are NOT stored yet; they freeze at
+    lock). Forward-only: refuses any game whose date is not >= today, so a played game can never be
+    backfilled (the live model has ingested played results; a backfill would be hindsight). Idempotent via
+    dedup_key. candidates = [{match, team_a, team_b, commence_time, stage, dedup_key}]."""
+    if not candidates:
+        return 0
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    inserted = 0
+    with _conn() as c:
+        for r in candidates:
+            if not r.get("dedup_key") or (r.get("commence_time") or "")[:10] < today:
+                continue                     # forward-only guard
+            cur = c.execute(
+                """INSERT OR IGNORE INTO forecasts
+                   (match, team_a, team_b, commence_time, stage, logged_at, dedup_key)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (r["match"], r["team_a"], r["team_b"], r.get("commence_time"),
+                 r.get("stage"), now, r["dedup_key"]),
+            )
+            inserted += cur.rowcount
+    return inserted
+
+
+def lock_forecasts(board: dict, now_iso: str) -> int:
+    """Freeze the model + market 1X2 for any PENDING forecast inside its lock window, exactly once. The
+    aggregator decides the timing (it owns the UTC kickoff math) and passes per-game flags:
+    board = {dedup_key: {lock_now, missed, kickoff_iso, model:(a,draw,b), market:(a,draw,b), sources}}.
+    lock_now -> freeze; missed (already kicked off, never locked) -> void; a stale pending row whose live
+    market/kickoff has vanished and whose date is past -> void. now_iso is the UTC lock stamp."""
+    if not now_iso:
+        return 0
+    cutoff = now_iso[:10]                     # model trained on results through ~now; this game is future
+    locked = 0
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, dedup_key, commence_time FROM forecasts WHERE status='pending'"
+        ).fetchall()
+        for r in rows:
+            b = board.get(r["dedup_key"])
+            if not b:
+                if (r["commence_time"] or "9999")[:10] < cutoff:
+                    c.execute("UPDATE forecasts SET status='void' WHERE id=?", (r["id"],))
+                continue
+            if b.get("missed"):
+                c.execute("UPDATE forecasts SET status='void' WHERE id=?", (r["id"],))
+                continue
+            if not b.get("lock_now"):
+                continue
+            m, k = b["model"], b["market"]
+            cur = c.execute(
+                """UPDATE forecasts SET status='locked', lock_ts=?, kickoff_iso=?, model_cutoff=?,
+                   model_a=?, model_draw=?, model_b=?, market_a=?, market_draw=?, market_b=?,
+                   market_sources=? WHERE id=? AND status='pending'""",
+                (now_iso, b.get("kickoff_iso"), cutoff, m[0], m[1], m[2], k[0], k[1], k[2],
+                 b.get("sources"), r["id"]),
+            )
+            locked += cur.rowcount
+    return locked
+
+
+def settle_forecasts(results: list[dict]) -> int:
+    """Grade LOCKED forecasts whose game has an ESPN result. actual_outcome comes from the 90+ET goals
+    dict, so a level knockout game grades as a DRAW (the model never claimed to call penalties; the
+    shootout is flagged in `pens`, not graded). Brier + RPS computed for both model and market against the
+    SAME outcome, so any reg/ET definitional noise hits both equally and the paired comparison stays fair.
+    Idempotent via the status='locked' guard."""
+    if not results:
+        return 0
+    idx: dict = {}
+    for g in results:
+        ks = list((g.get("goals") or {}).keys())
+        if len(ks) == 2:
+            idx[frozenset(ks)] = g           # knockout pairs are unique, so a team-pair key is enough
+    if not idx:
+        return 0
+    settled = 0
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM forecasts WHERE status='locked' "
+            "AND model_a IS NOT NULL AND market_a IS NOT NULL"
+        ).fetchall()
+        for r in rows:
+            g = idx.get(frozenset((r["team_a"], r["team_b"])))
+            if not g:
+                continue
+            ga, gb = g["goals"].get(r["team_a"]), g["goals"].get(r["team_b"])
+            if ga is None or gb is None:
+                continue
+            outcome = "a" if ga > gb else "b" if gb > ga else "draw"
+            oi = _OUTCOME_IDX[outcome]
+            pens = 1 if (outcome == "draw" and g.get("winner")) else 0
+            mp = (r["model_a"], r["model_draw"], r["model_b"])
+            kp = (r["market_a"], r["market_draw"], r["market_b"])
+            hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
+            c.execute(
+                """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
+                   pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?
+                   WHERE id=? AND status='locked'""",
+                (ga, gb, outcome, pens, _brier3(mp, oi), _brier3(kp, oi),
+                 _rps3(mp, oi), _rps3(kp, oi), hit, r["id"]),
+            )
+            settled += 1
+    return settled
+
+
+def list_forecasts() -> list[dict]:
+    """Locked (awaiting result) + settled forecasts, soonest-undecided and most-recent first."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
+            "ORDER BY status='locked' DESC, commence_time DESC, id DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forecast_calibration() -> dict:
+    """Paired model-vs-market scorecard over SETTLED forecasts. Gated: aggregates are withheld until
+    FORECAST_MIN_N settle (knockout samples are tiny), and even then it stays exploratory (wide CIs, do
+    NOT retrain on it). skill_vs_market > 0 means the model's Brier beat the de-vigged market's."""
+    min_n = getattr(config, "FORECAST_MIN_N", 8)
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT brier_model, brier_market, rps_model, rps_market, hit_model "
+            "FROM forecasts WHERE status='settled' AND brier_model IS NOT NULL"
+        ).fetchall()
+        locked = c.execute("SELECT COUNT(*) FROM forecasts WHERE status='locked'").fetchone()[0]
+    n = len(rows)
+    out = {"n": n, "min_n": min_n, "ready": n >= min_n, "locked_pending": locked}
+    if n < min_n:
+        return out                            # gate: withhold every aggregate until the sample is big enough
+    bm = sum(r["brier_model"] for r in rows) / n
+    bk = sum(r["brier_market"] for r in rows) / n
+    out.update({
+        "brier_model": round(bm, 3), "brier_market": round(bk, 3),
+        "rps_model": round(sum(r["rps_model"] for r in rows) / n, 3),
+        "rps_market": round(sum(r["rps_market"] for r in rows) / n, 3),
+        "hit_rate": round(sum(r["hit_model"] for r in rows) / n * 100, 1),
+        "skill_vs_market": round((1 - bm / bk) * 100, 1) if bk else None,  # +ve = model beats the market
+        "beat_market": sum(1 for r in rows if r["brier_model"] < r["brier_market"]),
+    })
     return out
 
 

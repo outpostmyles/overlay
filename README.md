@@ -59,6 +59,11 @@ The per-90 rate is the player's measured rate (accumulated from API-Football) sh
 ### An honestly backtested match model
 An independent Poisson / Dixon-Coles rating model is trained on roughly 9,000 international results since 2017. Team strengths are opponent-adjusted by a deterministic fixed-point iteration (a team's attack is its goals scored relative to the strength of the defenses it actually faced), so beating up weak opponents no longer inflates a rating. It is validated on a time-split holdout and scored on Brier score, log loss, and ranked probability score against naive baselines, with documented avoidance of data leakage; the opponent adjustment is a measured out-of-sample gain (about 8% better Brier, 10% better RPS) over raw goal-average ratings. It is presented as a second opinion, not a market-beater; the model README is candid that a simple ratings model does not beat a sharp closing line. See `backend/model/README.md`.
 
+### A pre-kickoff forecast ledger that grades the model against the market
+The Track Record grades the user's bets on closing line value. The Model Ledger does the mirror-image thing for the model itself: for every upcoming game it freezes a 1X2 forecast (home win / draw / away win) from the match model and, at the very same instant, freezes the de-vigged Polymarket and Kalshi line as the benchmark. After the game both are graded against the result on Brier score and ranked probability score, and the one question it answers is whether the model adds information over the sharp market or merely echoes it. It is the calibration counterpart to CLV: a closed, honest loop that tests the model rather than the bettor.
+
+The honesty is enforced structurally, because a forecast is only worth something if it could not have peeked. The forecast locks roughly 75 minutes before kickoff, ahead of the official-lineup feed, so it cannot absorb team news. The market benchmark is frozen at the same instant and never updated, so the comparison stays apples to apples. Grading uses the regulation-and-extra-time scoreline, so a level knockout grades as a genuine draw and penalties are flagged but out of scope (the model never claimed to predict a shootout). It is forward-only and never backfilled, because the live model has already ingested the played games and a backfilled prediction would be hindsight; every row is stamped with the date through which the model was trained. And because a knockout bracket is a tiny sample, the aggregate scores are withheld at the data layer until enough games settle, with a standing caveat that the record is exploratory and must never be used to retune the model. It rides the free refresh loop with no paid call, reusing the de-vigged lines, kickoff times, and results already in hand, and is isolated so a storage error degrades only the ledger. Surfaced on the Model Ledger tab.
+
 ### A de-vigged knockout futures board, with a Monte Carlo bracket as the second opinion
 The markets Polymarket runs at the most volume are whole-tournament: win the cup, reach the semi-final, reach the quarter-final, reach the round of 16. The Futures tab leads with the de-vigged version of these: each market is normalized so the probabilities sum to the number of teams that actually reach the stage (1 for the winner, 4 for the semi, 8 for the quarter, 16 for the round of 16), which strips the book margin and yields a clean vig-free probability for every team. That sharp number is the headline.
 
@@ -88,13 +93,13 @@ backend/
   sources/      polymarket · kalshi · prizepicks · theoddsapi · espn · apifootball  (adapters -> normalized markets)
   engine/       odds_math (convert / de-vig / Kelly) · edges (fair line + best price)
   model/        ratings (Poisson 1X2) · props (opponent-adjusted props) · corners · tournament (Monte Carlo bracket) · parlay · player_rates
-  store/        paper (SQLite ledger, settlement, CLV, P/L)
+  store/        paper (SQLite bet ledger + the forecast ledger: settlement, CLV, Brier/RPS calibration) · leans
   matching.py   team and market normalization across sources
   smartmoney.py Polymarket per-game whale positions and flow
   reasoning.py  web-grounded AI match verdicts (manual, cached)
   aggregator.py orchestration: fetch -> merge -> compute boards -> settle
   main.py       FastAPI API + serves the dashboard
-frontend/       index.html · app.js · styles.css   (Best Bets · Research · Track Record)
+frontend/       index.html · app.js · styles.css   (Best Bets · Model Ledger · Research · Track Record · Futures)
 ```
 
 The frontend polls a single `/api/snapshot` endpoint that returns the full board; manual flags on that endpoint (refresh free feeds, refresh sportsbook lines, run AI analysis) are the only paths that spend money or credits.
@@ -125,7 +130,9 @@ Working and in active personal use:
 - opponent-adjusted prop and corner projections,
 - same-game parlay pricing,
 - web-grounded AI match verdicts (manual trigger),
-- a full settlement and CLV loop with a bankroll curve and by-archetype record.
+- a full settlement and CLV loop with a bankroll curve and by-archetype record,
+- a de-vigged knockout futures board with a Monte Carlo bracket as the second opinion,
+- a pre-kickoff forecast ledger that grades the model against the market on Brier score and ranked probability score.
 
 Scope: the 2026 FIFA World Cup only. The prediction-market and stats sources, the team model, and the bet archetypes are all World Cup specific; the tool has not been pointed at any other event or sport.
 

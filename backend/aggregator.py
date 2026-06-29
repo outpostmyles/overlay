@@ -11,7 +11,7 @@ import asyncio
 import json
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
@@ -279,6 +279,68 @@ def _slate_matchups(markets: list[Market]) -> list[dict]:
         })
     out.sort(key=lambda x: (x["days_out"] if x["days_out"] is not None else 999))
     return out
+
+
+def _parse_iso(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
+                    now: datetime) -> tuple[list[dict], dict]:
+    """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
+    any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
+    1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
+    lives. team_a/team_b are the two keys sorted, so a game maps to one stable row (the model is
+    neutral-venue, so the slot assignment is arbitrary but consistent for model, market, and grading)."""
+    today = now.date().isoformat()
+    cands: list[dict] = []
+    board: dict = {}
+    for m in markets:
+        if m.market_type != "moneyline":
+            continue
+        draw = next((s for s in m.selections if s.key == "draw"), None)
+        teams = sorted((s for s in m.selections if s.key != "draw"), key=lambda s: s.key)
+        if draw is None or draw.fair_prob is None or len(teams) < 2:
+            continue                              # need a clean 3-way de-vigged benchmark
+        teams = teams[:2]
+        if teams[0].fair_prob is None or teams[1].fair_prob is None:
+            continue
+        a, b = teams[0].key, teams[1].key
+        mp = model.match_probs(a, b) if model else None
+        if not mp:
+            continue                              # model can't price both teams
+        gdate = (m.commence_time or "")[:10]
+        if not gdate or gdate < today:
+            continue                              # forward-only
+        ma, md, mb = teams[0].fair_prob, draw.fair_prob, teams[1].fair_prob
+        tot = ma + md + mb
+        if tot <= 0:
+            continue
+        dedup = f"fc|{gdate}|{a}|{b}"
+        cands.append({"match": m.event, "team_a": a, "team_b": b,
+                      "commence_time": gdate, "stage": None, "dedup_key": dedup})
+        ko = kickoffs.get(frozenset((a, b)))
+        kdt = _parse_iso(ko)
+        lock_now = missed = False
+        if kdt:
+            missed = now >= kdt
+            lock_now = (kdt - timedelta(minutes=buffer_min)) <= now < kdt
+        # no kickoff posted yet (ESPN hasn't published the time): stay pending and show in the live
+        # preview. A stale pending row whose date has passed is voided in paper.lock_forecasts instead.
+        sources = ",".join(sorted({q.source for s in m.selections for q in s.quotes
+                                   if q.source in config.SHARP_SOURCES}))
+        board[dedup] = {
+            "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
+            "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)),
+            "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
+            "sources": sources,
+        }
+    return cands, board
 
 
 # --------------------------------------------------------------------------- #
@@ -1273,6 +1335,40 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     if _valid_field(_field):
         leans.settle(_fb.get("rows", []), results, _field)
     picks_board["futures"] = {**_fb, "leans": leans.enrich(_fb.get("rows", []))}
+
+    # Model Ledger: freeze a pre-kickoff 1X2 forecast (the model AND the de-vigged market, at the same
+    # instant) for every upcoming game, then auto-grade both against the result. Forward-only and free:
+    # it reuses the de-vigged moneyline lines, the ESPN kickoffs, and the ESPN results already in hand.
+    # Isolated like get_futures: the Model Ledger is an optional second opinion, so a DB/settlement error
+    # here must degrade only the ledger, never take down Best Bets / Research / Futures / Track Record.
+    if config.FORECAST_ENABLED and model:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            fdates = sorted({(m.commence_time or "").replace("-", "")[:8] for m in markets
+                             if m.market_type == "moneyline"
+                             and len((m.commence_time or "").replace("-", "")) >= 8})
+            fkicks = await get_kickoffs(fdates)
+            fcands, fboard = _forecast_board(markets, model, fkicks,
+                                             config.FORECAST_LOCK_BUFFER_MINUTES, now_utc)
+            paper.log_forecasts(fcands, now_utc.date().isoformat())
+            paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            paper.settle_forecasts(results)
+            rows = paper.list_forecasts()                   # frozen (locked) + graded (settled)
+            frozen = {r["dedup_key"] for r in rows}
+            # live preview of games not yet frozen: the model's CURRENT line, shown so the slate isn't
+            # empty before the lock, explicitly NOT part of the graded record (it freezes ~75 min pre-KO).
+            upcoming = [{**c, "model": fboard[c["dedup_key"]]["model"],
+                         "market": fboard[c["dedup_key"]]["market"],
+                         "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
+                         "sources": fboard[c["dedup_key"]]["sources"]}
+                        for c in fcands
+                        if c["dedup_key"] not in frozen and not fboard[c["dedup_key"]]["missed"]]
+            upcoming.sort(key=lambda c: (c.get("kickoff_iso") or "9999"))
+            picks_board["model_ledger"] = {"rows": rows, "upcoming": upcoming,
+                                           "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
+                                           "summary": paper.forecast_calibration()}
+        except Exception as exc:  # noqa: BLE001
+            print(f"[aggregator] model_ledger skipped: {exc}")
 
     # AI reasoning — manual-trigger (reason=True) spends; otherwise reuse the disk cache
     bundles = picks_board.get("match_bundles", [])

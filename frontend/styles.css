@@ -442,6 +442,33 @@ input::placeholder { color: var(--muted); }
 .scen-tbl td.pos { color: var(--positive); }
 .scen-tbl td.neg { color: var(--negative); }
 
+/* Model Ledger: pre-kickoff 1X2 forecasts, model vs market */
+.tiny { font-size: 10.5px; }
+.val.neg { color: var(--negative); }
+.val.pos { color: var(--positive); }
+.lg-score { margin-bottom: 10px; }
+.fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+.fcard { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.fcard-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fcard-m { font: 13px var(--font-ui); }
+.fcard-k { font-size: 10.5px; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+.fcard-leg { display: flex; justify-content: space-between; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; margin: 7px 0 2px; }
+.fcard-leg span:nth-child(2) { color: var(--muted); }
+.fcard-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.fcard-t { font: 600 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); width: 42px; flex: none; }
+.fcard-n { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; flex: none; width: 64px; text-align: right; }
+.tribar { display: flex; flex: 1; height: 9px; border-radius: 5px; overflow: hidden; background: var(--surface3); }
+.tribar i { height: 100%; display: block; }
+.tribar .t-a { background: var(--accent); }
+.tribar .t-d { background: #3a4150; }
+.tribar .t-b { background: var(--accent2); }
+.tag.gap { background: rgba(240,101,91,.14); color: var(--negative); text-transform: none; letter-spacing: 0; }
+.lg-tbl { width: 100%; border-collapse: collapse; }
+.lg-tbl th { font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.lg-tbl td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; font-size: 12.5px; }
+.lg-tbl td .tribar { min-width: 90px; margin-bottom: 2px; }
+.lg-tbl td.num { font-family: var(--font-mono); font-size: 11.5px; text-align: right; white-space: nowrap; }
+
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {
   :root { --rail: 58px; }

@@ -62,6 +62,7 @@
   <div class="shell">
     <nav class="rail">
       <button class="tab active" data-tab="picks"><svg class="ico"><use href="#i-picks"/></svg><span class="label">Best Bets</span></button>
+      <button class="tab" data-tab="ledger"><svg class="ico"><use href="#i-track"/></svg><span class="label">Model Ledger</span></button>
       <button class="tab" data-tab="research"><svg class="ico"><use href="#i-analyze"/></svg><span class="label">Research</span></button>
       <button class="tab" data-tab="track"><svg class="ico"><use href="#i-track"/></svg><span class="label">Track Record</span></button>
       <button class="tab" data-tab="futures"><svg class="ico"><use href="#i-markets"/></svg><span class="label">Futures</span></button>
@@ -78,6 +79,11 @@
         <div id="ai-banner"></div>
         <div id="today-card"></div>
         <div id="bestbets"></div>
+      </section>
+
+      <section id="tab-ledger" class="panel">
+        <p class="hint">A pre-kickoff <b>1X2 forecast</b> for every game, frozen ~75 minutes before kickoff (before lineups leak), with the de-vigged market line frozen at the same instant as the benchmark. After the game, both are graded against the result. This grades the <b>model</b> on calibration, not your bets on CLV: the one question it answers is whether the model adds anything over the sharp market. Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw). Small sample, exploratory: aggregates stay hidden until enough games settle, and this should never be used to retune the model.</p>
+        <div id="ledger-body"></div>
       </section>
 
       <section id="tab-research" class="panel">

@@ -70,6 +70,7 @@ function renderAll() {
     btn.disabled = false;
   }
   renderPicks();
+  renderLedger();
   renderResearch();
   renderFutures();
   if (state.tab === "track") loadPaper();
@@ -98,6 +99,93 @@ function renderLeans(leans) {
   return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted">· live <b>Drift</b> is the sharp line moving toward your call (up for a back, down for a fade); once a stage is decided the lean settles W/L with its realized <b>CLV</b>${rec}</span></h3>
     <table><thead><tr><th>Lean</th><th class="num">Entry</th><th class="num">Now / close</th><th class="num">Drift / CLV</th><th></th></tr></thead>
     <tbody>${leans.map(row).join("")}</tbody></table></div>`;
+}
+
+// ---------- render: Model Ledger (pre-kickoff 1X2 forecasts, model vs market, graded) ----------
+const _koLabel = (iso) => {
+  if (!iso) return "TBD";
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso.slice(0, 16));
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " +
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+};
+const _trip = (p) => `${Math.round(p[0] * 100)} / ${Math.round(p[1] * 100)} / ${Math.round(p[2] * 100)}`;
+// stacked 1X2 bar: team-A win | draw | team-B win
+function _triBar(p, a, b) {
+  const w = (x) => (Math.max(0, x) * 100).toFixed(1);
+  return `<span class="tribar">`
+    + `<i class="t-a" style="width:${w(p[0])}%" title="${esc(teamName(a))} win ${Math.round(p[0] * 100)}%"></i>`
+    + `<i class="t-d" style="width:${w(p[1])}%" title="draw ${Math.round(p[1] * 100)}%"></i>`
+    + `<i class="t-b" style="width:${w(p[2])}%" title="${esc(teamName(b))} win ${Math.round(p[2] * 100)}%"></i></span>`;
+}
+function _forecastCard(c) {
+  const badge = c.frozen
+    ? `<span class="tag pin" title="frozen ${esc(c.lock_ts || "")}">locked</span>`
+    : `<span class="tag" title="live model line, not yet part of the record">preview</span>`;
+  // biggest model-vs-market disagreement across the three outcomes, flagged when it is material
+  const gap = Math.round(Math.max(...[0, 1, 2].map((i) => Math.abs(c.model[i] - c.market[i]))) * 100);
+  const gapChip = gap >= 8 ? ` <span class="tag gap" title="largest model vs market gap">Δ${gap}pp</span>` : "";
+  return `<div class="fcard">
+    <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(c.a))}</b> <span class="muted">v</span> <b>${esc(teamName(c.b))}</b></span><span class="fcard-k muted">${_koLabel(c.kickoff_iso)} ${badge}${gapChip}</span></div>
+    <div class="fcard-leg muted"><span>${esc(teamName(c.a))}</span><span>Draw</span><span>${esc(teamName(c.b))}</span></div>
+    <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>
+    <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
+  </div>`;
+}
+function _ledgerScore(s) {
+  const open = s.locked_pending ? `<span class="muted">${s.locked_pending} locked, awaiting result</span>` : "";
+  if (!s.ready) {
+    return `<div class="cal-note">${ico("track")} <b>${s.n}</b> of ${s.min_n} graded forecasts. Aggregate scores stay hidden until ${s.min_n} settle, so a couple of games cannot masquerade as a verdict. Each game below is still graded on its own. ${open}</div>`;
+  }
+  const skill = s.skill_vs_market;
+  const scls = skill == null ? "" : skill > 0 ? "pos" : "neg";
+  const verdict = skill == null ? "even with the market"
+    : skill > 0 ? "model is beating the market" : "model trails the market";
+  return `<div class="summary lg-score">
+    <div class="stat"><div class="label">Brier skill vs market</div><div class="val ${scls}">${skill == null ? "—" : (skill > 0 ? "+" : "") + skill + "%"}</div></div>
+    <div class="stat"><div class="label">Model Brier</div><div class="val">${s.brier_model} <span class="muted" style="font-size:13px">vs ${s.brier_market}</span></div></div>
+    <div class="stat"><div class="label">Winner hit rate</div><div class="val">${s.hit_rate}%</div></div>
+    <div class="stat"><div class="label">Model closer than market</div><div class="val">${s.beat_market}/${s.n}</div></div>
+  </div>
+  <div class="cal-note muted">${esc(verdict)}. Exploratory: ${s.n} settled is a small sample with wide error bars. This measures the model, it is not a betting record, and it must never be used to retune the model. ${open}</div>`;
+}
+function renderLedger() {
+  const box = $("#ledger-body"); if (!box) return;
+  const ml = state.snapshot && state.snapshot.picks && state.snapshot.picks.model_ledger;
+  if (!ml) { box.innerHTML = `<div class="muted" style="padding:14px">The Model Ledger fills in as the knockout games approach.</div>`; return; }
+  const rows = ml.rows || [];
+  const locked = rows.filter((r) => r.status === "locked").map((r) => ({
+    a: r.team_a, b: r.team_b, model: [r.model_a, r.model_draw, r.model_b],
+    market: [r.market_a, r.market_draw, r.market_b], kickoff_iso: r.kickoff_iso, frozen: true, lock_ts: r.lock_ts }));
+  const upcoming = (ml.upcoming || []).map((c) => ({
+    a: c.team_a, b: c.team_b, model: c.model, market: c.market, kickoff_iso: c.kickoff_iso, frozen: false }));
+  const settled = rows.filter((r) => r.status === "settled");
+  const cards = locked.concat(upcoming);
+  const cardHtml = cards.length
+    ? `<div class="pick-section"><h3>${ico("markets")} Forecasts <span class="muted">· locked freezes the line ${ml.buffer_min || 75} min before kickoff; preview is the live model line until then</span></h3><div class="fgrid">${cards.map(_forecastCard).join("")}</div></div>`
+    : "";
+  let settledHtml = "";
+  if (settled.length) {
+    const r2 = (x) => (x == null ? "—" : x.toFixed(2));
+    const row = (r) => {
+      const m = [r.model_a, r.model_draw, r.model_b], k = [r.market_a, r.market_draw, r.market_b];
+      const oc = r.actual_outcome === "a" ? r.team_a : r.actual_outcome === "b" ? r.team_b : "Draw";
+      const score = `${r.actual_a}-${r.actual_b}${r.pens ? " (pens)" : ""}`;
+      const better = r.brier_model < r.brier_market;
+      return `<tr>
+        <td><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b><div class="muted tiny">${esc((r.commence_time || "").slice(0, 10))}</div></td>
+        <td>${_triBar(m, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(m)}</div></td>
+        <td>${_triBar(k, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(k)}</div></td>
+        <td><b>${esc(score)}</b><div class="muted tiny">${esc(r.actual_outcome === "draw" ? "draw" : teamName(oc) + " win")}</div></td>
+        <td class="num ${better ? "flow-up" : "flow-dn"}">${r2(r.brier_model)}<span class="muted"> / ${r2(r.brier_market)}</span></td>
+        <td class="num">${r.hit_model ? "✓" : "✗"}</td></tr>`;
+    };
+    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· model 1X2 vs the market line frozen at the same instant, scored on the result (lower Brier is better; green = model beat the market that game)</span></h3>
+      <table class="lg-tbl"><thead><tr><th>Game</th><th>Model</th><th>Market</th><th>Result</th><th class="num">Brier m/mkt</th><th class="num">Hit</th></tr></thead><tbody>${settled.map(row).join("")}</tbody></table></div>`;
+  }
+  const empty = (!cards.length && !settled.length)
+    ? `<div class="muted" style="padding:14px">No forecasts yet. Each knockout game is logged here and freezes about ${ml.buffer_min || 75} minutes before kickoff.</div>` : "";
+  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + cardHtml + settledHtml + empty;
 }
 
 function renderFutures() {

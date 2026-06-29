@@ -77,6 +77,16 @@ FUTURESREAD_CACHE_PATH = ROOT / "poly_futuresread_cache.json"   # on-demand AI r
 LEANS_PATH = ROOT / "poly_futures_leans.json"                   # user-logged futures leans (CLV-tracked)
 ENABLE_MEMORY = True                         # calibration: learn from the paper ledger (gated, safe)
 
+# --- Model Ledger: pre-kickoff forecast + calibration (model vs market, graded on the result) ---
+# A frozen-before-kickoff 1X2 forecast for each upcoming game, with the de-vigged market line frozen at
+# the SAME instant as the benchmark, then auto-graded against the ESPN result. Forward-only (never
+# backfilled: the live model has ingested played results, so a backfill would be hindsight).
+FORECAST_ENABLED = True
+FORECAST_LOCK_BUFFER_MINUTES = 75            # lock at kickoff - 75 min, BEFORE ESPN posts the XI (~60 min
+                                             # out) so a forecast can never absorb team news
+FORECAST_MIN_N = 8                           # hide aggregate Brier/skill until this many settle (small KO
+                                             # sample); raw rows always show, with a wide-CI caveat
+
 # --- AI reasoning (manual-trigger, disk-cached — never on the auto-refresh) ---
 REASONING_MAX_MATCHES = 10                   # cap matches reasoned per run (cost control)
 REASONING_CACHE_PATH = ROOT / "poly_reasoning_cache.json"
