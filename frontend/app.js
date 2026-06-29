@@ -121,9 +121,26 @@ function renderFutures() {
     <table><thead><tr><th>Team</th><th class="num">Market</th><th class="num">Model</th><th class="num">Δ model</th><th class="num">Act</th></tr></thead>
     <tbody>${byKind[kind].map(row).join("")}</tbody></table></div>`;
   const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
-  box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span></h2>`
-    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. <b>Model</b> is an independent, opponent-adjusted second opinion that can diverge either way (over-rating dominant long-run scorers, under-rating teams the market values beyond goals). Tap <b>Read</b> for an AI take that weighs your notes against the gap, then <b>Back</b> / <b>Fade</b> to log a lean and watch the line drift toward your call.</div>`
-    + notes + renderLeans(f.leans) + Object.keys(byKind).map(section).join("");
+  const view = localStorage.getItem("overlay_futures_view") || "bracket";
+  const toggle = `<span class="fview"><button class="act tiny ${view === "bracket" ? "on" : ""}" data-fview="bracket">Bracket</button><button class="act tiny ${view === "list" ? "on" : ""}" data-fview="list">List</button></span>`;
+  const main = view === "list" ? Object.keys(byKind).map(section).join("") : renderBracket(f.bracket);
+  box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
+    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</div>`
+    + notes + renderLeans(f.leans) + main;
+}
+
+function renderBracket(br) {
+  if (!br || !br.rounds || !br.rounds.length) return `<div class="muted" style="padding:14px">The bracket fills in as the knockout markets price up.</div>`;
+  const teamCell = (team, pct, win) => team
+    ? `<div class="bteam ${win ? "bwin" : ""}"><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`
+    : `<div class="bteam tbd">TBD</div>`;
+  const match = (mu) => {
+    const tie = mu.mkt_a == null ? "" : `<div class="btie" title="${esc(teamName(mu.a))} to win this tie (market / model)">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
+    return `<div class="bmatch ${mu.winner ? "done" : "pending"}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b)}${tie}</div>`;
+  };
+  const cols = br.rounds.map((r) => `<div class="bcol"><div class="bcol-h">${esc(r.name)}</div>${r.matchups.map(match).join("")}</div>`).join("");
+  const champ = br.champion ? `<div class="bcol bcol-champ"><div class="bcol-h">Champion</div><div class="bmatch champ">${teamCell(br.champion, null, true)}</div></div>` : "";
+  return `<div class="bracket-wrap"><div class="bracket">${cols}${champ}</div></div>`;
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }
 
@@ -662,7 +679,10 @@ document.addEventListener("click", async (e) => {
     rm.disabled = true;
     try { await getJSON("/api/futures/lean/" + encodeURIComponent(rm.dataset.leanRm), { method: "DELETE" }); await loadSnapshot(); }
     catch (err) { rm.disabled = false; }
+    return;
   }
+  const fv = e.target.closest("[data-fview]");
+  if (fv) { localStorage.setItem("overlay_futures_view", fv.dataset.fview); renderFutures(); }
 });
 
 // hide-chalk toggle (delegated; persists across re-renders via the body class)

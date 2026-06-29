@@ -404,6 +404,25 @@ input::placeholder { color: var(--muted); }
 .scout textarea:focus { outline: none; border-color: var(--accent); }
 .lean-note { font: italic 11.5px var(--font-ui); color: var(--muted); margin-top: 2px; }
 
+/* Futures bracket tree */
+.fview { float: right; }
+.fview .act.tiny.on { color: var(--text); border-color: var(--accent); background: rgba(139,123,255,.10); }
+.bracket-wrap { overflow-x: auto; padding: 4px 0 14px; }
+.bracket { display: flex; gap: 16px; min-width: max-content; }
+.bcol { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; min-width: 156px; }
+.bcol-champ { justify-content: center; min-width: 130px; }
+.bcol-h { font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); text-align: center; margin-bottom: 2px; }
+.bmatch { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; }
+.bmatch.pending { opacity: .8; }
+.bmatch.champ { border-color: var(--accent); background: rgba(139,123,255,.09); }
+.bteam { display: flex; justify-content: space-between; align-items: center; gap: 8px; font: 12.5px var(--font-ui); color: var(--muted); padding: 2px 0; }
+.bteam.bwin { font-weight: 700; color: var(--text); }
+.bteam.bwin .bpct { color: var(--positive); }
+.bteam.tbd { font-style: italic; opacity: .6; }
+.bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bpct { font-family: var(--font-mono); font-size: 11px; flex: none; }
+.btie { font: 9px var(--font-mono); color: var(--muted); text-align: right; margin-top: 3px; padding-top: 3px; border-top: 1px solid rgba(255,255,255,.05); }
+
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {
   :root { --rail: 58px; }

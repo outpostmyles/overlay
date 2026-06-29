@@ -1031,11 +1031,13 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
                               n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
 
     rows = []
+    devig_by_stage: dict = {}
     for order, (simkey, mtype, target, label, topn) in enumerate(_FUTURES_STAGES):
         m = market_by_type.get(mtype)
         if not m:
             continue
         fair = _devig_market(m, target, field_teams)
+        devig_by_stage[simkey] = fair
         for team, mk in sorted(fair.items(), key=lambda kv: -kv[1])[:topn]:
             md = sim.get(team, {}).get(simkey)
             if md is None:
@@ -1049,7 +1051,81 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
         r.pop("_sort", None)
     shown = {r["team"] for r in rows}
     return {"rows": rows, "groups_covered": covered, "sims": config.TOURNAMENT_SIMS,
-            "games_locked": len(played), "records": _team_records(results, shown)}
+            "games_locked": len(played), "records": _team_records(results, shown),
+            "bracket": _build_bracket(devig_by_stage, model, results, field)}
+
+
+# WC2026 knockout draw (Round of 32, top to bottom; the tree is adjacent pairs feeding each next round).
+# Team keys match the model/market normalization. Fixed once the group stage sets the bracket.
+_BRACKET_R32 = [
+    ("germany", "paraguay"), ("france", "sweden"), ("south africa", "canada"), ("netherlands", "morocco"),
+    ("portugal", "croatia"), ("spain", "austria"), ("united states", "bosnia and herzegovina"), ("belgium", "senegal"),
+    ("brazil", "japan"), ("cote divoire", "norway"), ("mexico", "ecuador"), ("england", "dr congo"),
+    ("argentina", "cabo verde"), ("australia", "egypt"), ("switzerland", "algeria"), ("colombia", "ghana"),
+]
+# (round display name, de-vig stage key giving each team's "advance from here" probability)
+_BRACKET_ROUNDS = [("Round of 32", "reach_r16"), ("Round of 16", "reach_qf"),
+                   ("Quarter-finals", "reach_sf"), ("Semi-finals", "win_cup"), ("Final", "win_cup")]
+
+
+def _knockout_winners(results: list[dict] | None, field: dict) -> dict:
+    """{frozenset({a,b}): winner_key} for finished cross-group (knockout) games, penalties-aware."""
+    team_group = {t: g for g, ts in (field or {}).items() for t in ts}
+    out: dict = {}
+    for game in results or []:
+        goals = game.get("goals") or {}
+        teams = [t for t in goals if t in team_group]
+        if len(teams) != 2 or team_group.get(teams[0]) == team_group.get(teams[1]):
+            continue
+        a, b = teams
+        w = game.get("winner")
+        if w not in (a, b):
+            if goals.get(a) == goals.get(b):
+                continue
+            w = a if goals[a] > goals[b] else b
+        out[frozenset((a, b))] = w
+    return out
+
+
+def _build_bracket(devig: dict, model, results: list[dict] | None, field: dict) -> dict:
+    """The real knockout bracket (R32 -> Final) with the de-vigged advance % per team and the model +
+    market head-to-head per tie. A decided slot uses the actual advancer (penalties-aware); an undecided
+    slot projects the de-vigged favorite (the client dims it). Powers the bracket visualization."""
+    winners = _knockout_winners(results, field)
+
+    def advance(a, b, reach):
+        w = winners.get(frozenset((a, b)))
+        if w:
+            return w
+        rmap = devig.get(reach, {})
+        return a if rmap.get(a, 0) >= rmap.get(b, 0) else b
+
+    rounds = []
+    matchups = list(_BRACKET_R32)
+    for name, reach in _BRACKET_ROUNDS:
+        rmap = devig.get(reach, {})
+        out_matchups, nxt = [], []
+        for a, b in matchups:
+            mp = model.match_probs(a, b) if model else None
+            mdl_a = (mp[a] + 0.5 * mp["draw"]) if mp else None
+            pa, pb = rmap.get(a), rmap.get(b)
+            mkt_a = pa / (pa + pb) if (pa and pb) else None
+            out_matchups.append({
+                "a": a, "b": b,
+                "a_pct": round(pa * 100) if pa is not None else None,
+                "b_pct": round(pb * 100) if pb is not None else None,
+                "mkt_a": round(mkt_a * 100) if mkt_a is not None else None,
+                "mdl_a": round(mdl_a * 100) if mdl_a is not None else None,
+                "winner": winners.get(frozenset((a, b))),
+            })
+            nxt.append(advance(a, b, reach))
+        rounds.append({"name": name, "matchups": out_matchups})
+        matchups = [(nxt[i], nxt[i + 1]) for i in range(0, len(nxt) - 1, 2)]
+    champ = None
+    if rounds and rounds[-1]["matchups"]:
+        f = rounds[-1]["matchups"][0]
+        champ = advance(f["a"], f["b"], "win_cup")
+    return {"rounds": rounds, "champion": champ}
 
 
 def _team_records(results: list[dict] | None, teams: set) -> dict:
