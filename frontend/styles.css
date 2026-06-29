@@ -181,6 +181,9 @@ tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* badges */
 .tag { font: 600 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 5px; background: var(--surface3); color: var(--muted); }
+.tag.won { background: rgba(60,200,120,.15); color: var(--positive); }
+.tag.lost { background: rgba(230,90,90,.15); color: var(--negative); }
+tr.lean-settled td { opacity: .72; }
 .src { font: 600 10px var(--font-mono); letter-spacing: .03em; padding: 2px 7px; border-radius: 5px; }
 .src.pm { background: rgba(90,169,255,.13); color: var(--accent2); }
 .src.book { background: rgba(230,178,60,.13); color: var(--warning); }

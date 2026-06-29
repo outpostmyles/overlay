@@ -1138,8 +1138,11 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # Fetch results up front so the sim locks in already-played group games (cached, reused below).
     results = await get_results(force=force)
     _fb = await get_futures(markets, model, results)
-    # attach the user's logged leans fresh each snapshot (not inside the cached sim) so a just-logged
-    # lean shows up immediately, with CLV recomputed against the current board.
+    # settle logged leans (capture the moving close + resolve decided stages) then attach them fresh each
+    # snapshot, outside the cached sim, so a just-logged lean shows immediately with current drift/CLV.
+    _field = _load_groups_disk()
+    if _valid_field(_field):
+        leans.settle(_fb.get("rows", []), results, _field)
     picks_board["futures"] = {**_fb, "leans": leans.enrich(_fb.get("rows", []))}
 
     # AI reasoning — manual-trigger (reason=True) spends; otherwise reuse the disk cache

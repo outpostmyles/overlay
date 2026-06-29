@@ -81,17 +81,23 @@ function scoutNotes() { return localStorage.getItem("overlay_futures_notes") || 
 
 function renderLeans(leans) {
   if (!leans || !leans.length) return "";
-  const rows = leans.map((l) => {
-    const dr = l.drift_pp, cls = dr == null ? "muted" : dr > 0 ? "flow-up" : dr < 0 ? "flow-dn" : "muted";
-    return `<tr><td><b>${esc(teamName(l.team))}</b> <span class="tag">${esc(l.direction)}</span> <span class="muted">${esc(l.kind)}</span>${l.note ? `<div class="lean-note">“${esc(l.note)}”</div>` : ""}</td>
+  const row = (l) => {
+    const settled = l.status === "won" || l.status === "lost";
+    const badge = l.status === "won" ? ` <span class="tag won">WON</span>` : l.status === "lost" ? ` <span class="tag lost">LOST</span>` : "";
+    const metric = settled ? l.realized_clv : l.drift_pp;
+    const cls = metric == null ? "muted" : metric > 0 ? "flow-up" : metric < 0 ? "flow-dn" : "muted";
+    return `<tr class="${settled ? "lean-settled" : ""}"><td><b>${esc(teamName(l.team))}</b> <span class="tag">${esc(l.direction)}</span> <span class="muted">${esc(l.kind)}</span>${badge}${l.note ? `<div class="lean-note">“${esc(l.note)}”</div>` : ""}</td>
       <td class="num">${l.entry_pct}%</td>
       <td class="num">${l.current_pct == null ? "—" : l.current_pct + "%"}</td>
-      <td class="num ${cls}">${dr == null ? "—" : (dr > 0 ? "+" : "") + dr + "pp"}</td>
-      <td><button class="act tiny" data-lean-rm="${esc(l.id)}" title="remove this lean">×</button></td></tr>`;
-  }).join("");
-  return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted">· Drift is the sharp line moving toward your call since you logged it (up for a back, down for a fade), a CLV-style signal, not a settled bet</span></h3>
-    <table><thead><tr><th>Lean</th><th class="num">Entry</th><th class="num">Now</th><th class="num">Drift</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
+      <td class="num ${cls}">${metric == null ? "—" : (metric > 0 ? "+" : "") + metric + "pp"}</td>
+      <td>${settled ? "" : `<button class="act tiny" data-lean-rm="${esc(l.id)}" title="remove this lean">×</button>`}</td></tr>`;
+  };
+  const done = leans.filter((l) => l.status === "won" || l.status === "lost");
+  const w = done.filter((l) => l.status === "won").length;
+  const rec = done.length ? ` · settled ${w}-${done.length - w}` : "";
+  return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted">· live <b>Drift</b> is the sharp line moving toward your call (up for a back, down for a fade); once a stage is decided the lean settles W/L with its realized <b>CLV</b>${rec}</span></h3>
+    <table><thead><tr><th>Lean</th><th class="num">Entry</th><th class="num">Now / close</th><th class="num">Drift / CLV</th><th></th></tr></thead>
+    <tbody>${leans.map(row).join("")}</tbody></table></div>`;
 }
 
 function renderFutures() {

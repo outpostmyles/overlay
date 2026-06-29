@@ -132,7 +132,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             eid = str(ev.get("id") or "")
             if eid in cache:                       # finished game already summarized — no /summary re-fetch
                 c = cache[eid]
-                out.append({"date": c["date"], "goals": c["goals"],
+                out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                             "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or [])})
                 continue
             try:
@@ -140,12 +140,15 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             except (KeyError, IndexError, TypeError):
                 continue
             goals: dict = {}
+            winner = None                          # the advancing team (ESPN's flag includes ET/penalties)
             for cc in comp:
                 tk = normalize_team((cc.get("team") or {}).get("displayName"))
                 try:
                     goals[tk] = int(cc.get("score"))
                 except (TypeError, ValueError):
                     goals[tk] = None
+                if cc.get("winner"):
+                    winner = tk
             if not goals or any(v is None for v in goals.values()):
                 continue
             scorers: set = set()
@@ -168,12 +171,13 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                             nm = (p.get("athlete") or {}).get("displayName")
                             if nm:
                                 played.add(normalize_team(nm))
-                cache[eid] = {"date": _iso(d), "goals": goals,
+                cache[eid] = {"date": _iso(d), "goals": goals, "winner": winner,
                               "scorers": sorted(scorers), "played": sorted(played)}
                 new_cached += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
-            out.append({"date": _iso(d), "goals": goals, "scorers": scorers, "played": played})
+            out.append({"date": _iso(d), "goals": goals, "winner": winner,
+                        "scorers": scorers, "played": played})
     if new_cached:
         _save_results_cache(cache)
         print(f"[espn] memoized {new_cached} finished game(s); {len(cache)} cached total")
