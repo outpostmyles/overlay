@@ -60,7 +60,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
 
 # --- Futures: Monte Carlo tournament simulation (second opinion vs the Polymarket futures line) ---
-TOURNAMENT_SIMS = 3000                        # bracket simulations per run (cached + threaded)
+TOURNAMENT_SIMS = 6000                        # bracket simulations per run (cached + threaded)
+TOURNAMENT_SEED = 20260611                    # fixed seed: reproducible reach-stage % across refreshes
+                                              # (kills the +-1-2pp Monte Carlo jitter); not an accuracy claim
 TOURNAMENT_BASE_GOALS = 1.35                  # fallback expected goals when the model can't price a pair
 FUTURES_CACHE_TTL = 600                       # recompute the sim at most every 10 min
 GROUPS_CACHE_PATH = ROOT / "poly_groups_cache.json"   # accumulated group comps from the group-winner futures

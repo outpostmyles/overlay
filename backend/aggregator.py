@@ -1027,7 +1027,8 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
 
     field_teams = {t for ts in field.values() for t in ts}
     played = _played_in_groups(results, field)
-    sim = tournament.simulate(field, lambdas, strength, played=played, n=config.TOURNAMENT_SIMS)
+    sim = tournament.simulate(field, lambdas, strength, played=played,
+                              n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
 
     rows = []
     for order, (simkey, mtype, target, label, topn) in enumerate(_FUTURES_STAGES):
