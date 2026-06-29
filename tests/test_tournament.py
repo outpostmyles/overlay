@@ -56,3 +56,21 @@ def test_played_results_are_locked_in():
     conditioned = tournament.simulate(groups, lambdas, lambda t: 1.0, played=played, n=400, seed=1)
     assert conditioned["dog"]["win_group"] == 1.0
     assert conditioned["fav"]["win_group"] == 0.0
+
+
+def test_bracket_path_real_draw_and_locked_ties():
+    # 4-team fixed draw: slot0(strong) vs slot1(weak), slot2(mid) vs slot3(mid2). _KO_STAGES labels
+    # rounds positionally, so round 1 = reach_r16. The strong team beats the weak team it actually faces.
+    bracket = ["strong", "weak", "mid", "mid2"]
+
+    def lambdas(a, b):
+        return (2.6 if a == "strong" else 1.0, 2.6 if b == "strong" else 1.0)
+
+    res = tournament.simulate({}, lambdas, lambda t: 1.0, bracket=bracket, n=2000, seed=3)
+    assert res["strong"]["reach_r16"] > 0.7                 # wins its real first-round tie vs weak
+    assert all(0.0 <= res[t]["reach_r16"] <= 1.0 for t in bracket)
+
+    # a decided tie is locked to its real winner regardless of strength
+    locked = tournament.simulate({}, lambdas, lambda t: 1.0, bracket=bracket,
+                                 ko_played={frozenset(("strong", "weak")): "weak"}, n=400, seed=3)
+    assert locked["weak"]["reach_r16"] == 1.0 and locked["strong"]["reach_r16"] == 0.0

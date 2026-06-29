@@ -1027,7 +1027,11 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
 
     field_teams = {t for ts in field.values() for t in ts}
     played = _played_in_groups(results, field)
+    bracket_order = [t for pair in _BRACKET_R32 for t in pair]
+    real_draw = all(t in field_teams for t in bracket_order)   # use the actual draw when it matches the field
     sim = tournament.simulate(field, lambdas, strength, played=played,
+                              bracket=(bracket_order if real_draw else None),
+                              ko_played=(_knockout_winners(results, field) if real_draw else None),
                               n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
 
     rows = []

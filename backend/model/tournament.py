@@ -12,10 +12,11 @@ rest of the tool: prediction markets are the sharp anchor, the simulation is a s
 Fidelity, stated honestly:
   - Group stage is exact: 12 groups of 4, full round-robin, top 2 advance plus the 8 best third-place
     teams, ranked by points then goal difference then goals for.
-  - Knockout is a strength-seeded single-elimination approximation. The exact official bracket draw is
-    NOT modeled; each round re-seeds and pairs strong-vs-weak, and ties are resolved 50/50 (penalties).
-  - So group-stage probabilities (win group, advance) are robust; deep-run and winner probabilities are
-    directional.
+  - Knockout: when the real draw is supplied (simulate(bracket=...)) the ACTUAL bracket is played and
+    decided ties are locked to their real result, so reach-stage and winner numbers reflect each team's
+    true path; ties go 50/50 (penalties). Without a draw it falls back to a strength-seeded approximation.
+  - The one honest caveat left is the rating model itself: it under-separates elite teams, so in the open
+    knockout the simulation runs more conservative than a sharp market (read a gap as that, not an edge).
 """
 from __future__ import annotations
 
@@ -39,14 +40,50 @@ def _poisson(lam: float) -> int:
             return k - 1
 
 
-def simulate(groups: dict, lambdas, strength, played: dict | None = None,
-             n: int | None = None, seed: int | None = None) -> dict:
+def _simulate_bracket(bracket: list, ko_played: dict, lambdas, n: int, seed: int | None) -> dict:
+    """Play the REAL knockout draw: `bracket` is the 32 qualifiers in slot order (slot 0 plays slot 1,
+    etc.) and the tree is adjacent pairs up to the final. Decided ties in `ko_played` are locked to their
+    actual winner. Because the matchups are real (not strength-reseeded), reach-stage and win-cup numbers
+    are accurate to the path each team actually faces."""
+    if seed is not None:
+        random.seed(seed)
+    base = config.TOURNAMENT_BASE_GOALS
+    counts = {t: {k: 0 for k in _KEYS} for t in bracket}
+
+    def play(a, b):
+        la, lb = lambdas(a, b) or (base, base)
+        return _poisson(la), _poisson(lb)
+
+    for _ in range(n):
+        field = list(bracket)
+        for stage in _KO_STAGES:
+            if len(field) < 2:
+                break
+            nxt = []
+            for i in range(0, len(field) - 1, 2):
+                a, b = field[i], field[i + 1]
+                w = ko_played.get(frozenset((a, b)))
+                if not w:
+                    ga, gb = play(a, b)
+                    w = a if ga > gb else b if gb > ga else (a if random.random() < 0.5 else b)
+                nxt.append(w)
+            field = nxt
+            for t in field:
+                counts[t][stage] += 1
+    return {t: {k: round(v / n, 4) for k, v in c.items()} for t, c in counts.items()}
+
+
+def simulate(groups: dict, lambdas, strength, played: dict | None = None, bracket: list | None = None,
+             ko_played: dict | None = None, n: int | None = None, seed: int | None = None) -> dict:
     """groups: {label: [team_key, ...]}; lambdas(a, b) -> (la, lb) expected goals or None;
     strength(team) -> float (knockout seeding); played: {frozenset({a,b}): {a: goals, b: goals}} of group
-    matches ALREADY decided (their real result is locked in, not re-simulated, so mid-tournament the sim
-    conditions on the standings so far). Returns
+    matches ALREADY decided (locked in, not re-simulated). If `bracket` (the 32 qualifiers in real
+    slot order) is given, the knockout plays that ACTUAL draw (decided ties from `ko_played` locked in)
+    instead of strength-reseeding, so deep-run numbers reflect the real path. Returns
     {team: {win_group, advance, reach_r16, reach_qf, reach_sf, reach_final, win_cup}} as probabilities."""
     n = n or config.TOURNAMENT_SIMS
+    if bracket:
+        return _simulate_bracket(bracket, ko_played or {}, lambdas, n, seed)
     if seed is not None:
         random.seed(seed)
     played = played or {}
