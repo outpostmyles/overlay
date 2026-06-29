@@ -11,7 +11,7 @@ apt-get update -qq
 apt-get install -y -qq nginx apache2-utils
 
 # A login is OPTIONAL. Pass a username + password to require one:  setup-nginx.sh <user> <pass>
-# With no arguments the dashboard is public (no password) — simplest, fine for a personal tool.
+# With no arguments the dashboard is public (no password): simplest, fine for a personal tool.
 AUTH=""
 OVERLAY_USER="${1:-}"
 OVERLAY_PASS="${2:-}"
