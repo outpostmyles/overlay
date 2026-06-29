@@ -118,32 +118,41 @@ function _triBar(p, a, b) {
     + `<i class="t-d" style="width:${w(p[1])}%" title="draw ${Math.round(p[1] * 100)}%"></i>`
     + `<i class="t-b" style="width:${w(p[2])}%" title="${esc(teamName(b))} win ${Math.round(p[2] * 100)}%"></i></span>`;
 }
-// the model's pick on each extra market, as a compact chip
-function _legLabel(l) {
-  const t = l.team ? teamName(l.team) + " " : "";
-  if (l.key === "total_goals") return `Total ${l.side === "over" ? "O" : "U"}${l.line}`;
-  if (l.key === "team_total") return `${t}${l.side === "over" ? "O" : "U"}${l.line}`;
-  if (l.key === "btts") return `BTTS ${l.side === "yes" ? "Yes" : "No"}`;
-  if (l.key === "corners") return `Corners ${l.side === "over" ? "O" : "U"}${l.line}`;
-  return l.key;
-}
-function _legTitle(l, graded) {
-  const bits = [];
-  if (l.proj != null) bits.push(`model projects ${l.proj}`);
-  if (graded) bits.push(l.result === "pending" ? "awaiting data" : `actual ${l.actual} (${l.result})`);
-  else bits.push(`${Math.round((l.prob || 0) * 100)}% confidence`);
-  return bits.join("; ");
-}
-function _legChips(legs, graded) {
-  if (!legs || !legs.length) return "";
-  const chips = legs.map((l) => {
+// the model's explicit best guess on one extra market, as a labeled row
+const _predName = (l) => l.key === "total_goals" ? "Total goals"
+  : l.key === "team_total" ? `${teamName(l.team)} goals`
+  : l.key === "btts" ? "Both teams score"
+  : l.key === "corners" ? "Corners" : l.key;
+const _predPick = (l) => l.key === "btts" ? (l.side === "yes" ? "Yes" : "No")
+  : `${l.side === "over" ? "Over" : "Under"} ${l.line}`;
+// our guess = the projected number (the best estimate) + the resulting pick, e.g. "2.6 · Under 2.5"
+const _predGuess = (l) => (l.proj != null ? `${l.proj} · ` : "") + _predPick(l);
+const _predActual = (l) => l.result === "pending" ? "awaiting"
+  : l.key === "btts" ? (l.actual === "yes" ? "Yes" : "No") : String(l.actual);
+function _predRowsInner(legs, graded) {
+  return (legs || []).map((l) => {
+    const name = `<span class="pred-l">${esc(_predName(l))}</span>`;
+    if (!graded) {
+      return `<div class="pred">${name}<span class="pred-g">${esc(_predGuess(l))}</span><span class="pred-c">${Math.round((l.prob || 0) * 100)}%</span></div>`;
+    }
     const r = l.result;
-    const cls = graded ? (r === "won" ? "leg-won" : r === "lost" ? "leg-lost" : "leg-pend") : "";
-    const tail = graded ? (r === "won" ? " ✓" : r === "lost" ? " ✗" : " ·")
-      : ` <span class="legpct">${Math.round((l.prob || 0) * 100)}%</span>`;
-    return `<span class="leg ${cls}" title="${esc(_legTitle(l, graded))}">${esc(_legLabel(l))}${tail}</span>`;
+    const mark = r === "won" ? '<span class="pred-ok">✓</span>' : r === "lost" ? '<span class="pred-no">✗</span>' : '<span class="muted">·</span>';
+    return `<div class="pred ${r === "won" ? "pred-won" : r === "lost" ? "pred-lost" : ""}">${name}<span class="pred-g">${esc(_predPick(l))}</span><span class="pred-a">${esc(_predActual(l))} ${mark}</span></div>`;
   }).join("");
-  return `<div class="legs">${chips}</div>`;
+}
+// per-prop prediction list inside a card: upcoming shows our guess + confidence; settled shows pick vs actual
+function _predRows(legs, graded) {
+  if (!legs || !legs.length) return "";
+  return `<div class="preds">${_predRowsInner(legs, graded)}</div>`;
+}
+// the 1X2 as a prediction row for a settled game: our called winner vs what happened
+function _matchResultRow(r) {
+  const mi = [r.model_a, r.model_draw, r.model_b];
+  const pick = mi.indexOf(Math.max(...mi));
+  const called = pick === 1 ? "Draw" : teamName(pick === 0 ? r.team_a : r.team_b);
+  const actual = r.actual_outcome === "a" ? teamName(r.team_a) : r.actual_outcome === "b" ? teamName(r.team_b) : "Draw";
+  const mark = r.hit_model ? '<span class="pred-ok">✓</span>' : '<span class="pred-no">✗</span>';
+  return `<div class="pred pred-result ${r.hit_model ? "pred-won" : "pred-lost"}"><span class="pred-l">Match result</span><span class="pred-g">${esc(called)}</span><span class="pred-a">${esc(actual)} ${mark}</span></div>`;
 }
 // per-market hit rate across settled games (only counts legs that actually graded)
 function _legAccuracy(settled) {
@@ -170,7 +179,21 @@ function _forecastCard(c) {
     <div class="fcard-leg muted"><span>${esc(teamName(c.a))}</span><span>Draw</span><span>${esc(teamName(c.b))}</span></div>
     <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>
     <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
-    ${_legChips(c.legs, false)}
+    ${_predRows(c.legs, false)}
+  </div>`;
+}
+// settled game recap: the model line, our called result, then every prop predicted vs actual
+function _settledCard(r) {
+  const m = [r.model_a, r.model_draw, r.model_b];
+  const score = `${r.actual_a}-${r.actual_b}${r.pens ? " (pens)" : ""}`;
+  const brier = (r.brier_model != null && r.brier_market != null)
+    ? `<div class="fcard-brier muted" title="model 1X2 Brier vs the market frozen at lock (lower is better)">1X2 Brier ${r.brier_model.toFixed(2)} <span class="${r.brier_model < r.brier_market ? "pos" : "neg"}">vs market ${r.brier_market.toFixed(2)}</span></div>` : "";
+  return `<div class="fcard settled">
+    <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b></span><span class="fcard-k"><b>${esc(score)}</b> <span class="muted">${esc((r.commence_time || "").slice(0, 10))}</span></span></div>
+    <div class="fcard-leg muted"><span>${esc(teamName(r.team_a))}</span><span>Draw</span><span>${esc(teamName(r.team_b))}</span></div>
+    <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(m, r.team_a, r.team_b)}<span class="fcard-n">${_trip(m)}</span></div>
+    <div class="preds">${_matchResultRow(r)}${_predRowsInner(r.legs, true)}</div>
+    ${brier}
   </div>`;
 }
 function _ledgerScore(s) {
@@ -207,25 +230,9 @@ function renderLedger() {
     : "";
   let settledHtml = "";
   if (settled.length) {
-    const r2 = (x) => (x == null ? "—" : x.toFixed(2));
-    const row = (r) => {
-      const m = [r.model_a, r.model_draw, r.model_b], k = [r.market_a, r.market_draw, r.market_b];
-      const oc = r.actual_outcome === "a" ? r.team_a : r.actual_outcome === "b" ? r.team_b : "Draw";
-      const score = `${r.actual_a}-${r.actual_b}${r.pens ? " (pens)" : ""}`;
-      const better = r.brier_model < r.brier_market;
-      const legsRow = (r.legs && r.legs.length)
-        ? `<tr class="legrow"><td colspan="6">${_legChips(r.legs, true)}</td></tr>` : "";
-      return `<tr>
-        <td><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b><div class="muted tiny">${esc((r.commence_time || "").slice(0, 10))}</div></td>
-        <td>${_triBar(m, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(m)}</div></td>
-        <td>${_triBar(k, r.team_a, r.team_b)}<div class="fcard-n muted">${_trip(k)}</div></td>
-        <td><b>${esc(score)}</b><div class="muted tiny">${esc(r.actual_outcome === "draw" ? "draw" : teamName(oc) + " win")}</div></td>
-        <td class="num ${better ? "flow-up" : "flow-dn"}">${r2(r.brier_model)}<span class="muted"> / ${r2(r.brier_market)}</span></td>
-        <td class="num">${r.hit_model ? "✓" : "✗"}</td></tr>${legsRow}`;
-    };
-    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· the 1X2 row scores the model vs the market frozen at the same instant (lower Brier is better, green = model beat the market); the chips under each game are our pick on every other line, marked right or wrong</span></h3>
+    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· what we predicted vs what happened, every line marked right or wrong; the 1X2 also scores the model against the market frozen at the same instant</span></h3>
       ${_legAccuracy(settled)}
-      <table class="lg-tbl"><thead><tr><th>Game</th><th>Model</th><th>Market</th><th>Result</th><th class="num">Brier m/mkt</th><th class="num">Hit</th></tr></thead><tbody>${settled.map(row).join("")}</tbody></table></div>`;
+      <div class="fgrid">${settled.map(_settledCard).join("")}</div></div>`;
   }
   const empty = (!cards.length && !settled.length)
     ? `<div class="muted" style="padding:14px">No forecasts yet. Each knockout game is logged here and freezes about ${ml.buffer_min || 75} minutes before kickoff.</div>` : "";
