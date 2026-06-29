@@ -43,4 +43,4 @@ IP=$(curl -s -4 --max-time 5 ifconfig.me 2>/dev/null || hostname -I | awk '{prin
 echo
 echo "=== DONE ==="
 echo "Open  http://${IP}  and log in with the username + password you just set."
-echo "(The browser may say 'Not secure' since it is plain HTTP basic auth — that is expected; it still works.)"
+echo "(The browser may say 'Not secure' since it is plain HTTP basic auth; that is expected and it still works.)"
