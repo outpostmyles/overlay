@@ -422,6 +422,11 @@ input::placeholder { color: var(--muted); }
 .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bpct { font-family: var(--font-mono); font-size: 11px; flex: none; }
 .btie { font: 9px var(--font-mono); color: var(--muted); text-align: right; margin-top: 3px; padding-top: 3px; border-top: 1px solid rgba(255,255,255,.05); }
+.bmatch[title] { cursor: help; }
+.keyreads { align-items: flex-start; }
+.keyreads .kr { margin: 6px 0 0; padding-left: 16px; }
+.keyreads .kr li { margin: 3px 0; line-height: 1.45; }
+.keyreads .kr b { color: var(--text); }
 
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {

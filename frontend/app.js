@@ -123,10 +123,49 @@ function renderFutures() {
   const locked = f.games_locked ? ` · ${f.games_locked} games locked` : "";
   const view = localStorage.getItem("overlay_futures_view") || "bracket";
   const toggle = `<span class="fview"><button class="act tiny ${view === "bracket" ? "on" : ""}" data-fview="bracket">Bracket</button><button class="act tiny ${view === "list" ? "on" : ""}" data-fview="list">List</button></span>`;
-  const main = view === "list" ? Object.keys(byKind).map(section).join("") : renderBracket(f.bracket);
+  const main = view === "list" ? Object.keys(byKind).map(section).join("") : (bracketKeyReads(f.bracket) + renderBracket(f.bracket));
   box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
     + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</div>`
     + notes + renderLeans(f.leans) + main;
+}
+
+// one-line "why" for a tie, straight from the numbers: the favorite, how live the dog is, and where the
+// model disagrees with the market (the spot the user's eye-test can add edge over the sharp line).
+function matchupRead(mu) {
+  if (mu.winner) return `${teamName(mu.winner)} won the tie.`;
+  if (mu.mkt_a == null) return "";
+  const aFav = mu.mkt_a >= 50;
+  const fav = aFav ? mu.a : mu.b, dog = aFav ? mu.b : mu.a;
+  const favMkt = aFav ? mu.mkt_a : 100 - mu.mkt_a;
+  const favMdl = mu.mdl_a == null ? null : (aFav ? mu.mdl_a : 100 - mu.mdl_a);
+  let s;
+  if (favMkt >= 72) s = `${teamName(fav)} should win this; ${teamName(dog)} a longshot.`;
+  else if (favMkt >= 58) s = `${teamName(fav)} favored, ${teamName(dog)} live (${100 - favMkt}%).`;
+  else s = `Toss-up: ${teamName(fav)} ${favMkt}% vs ${teamName(dog)} ${100 - favMkt}%.`;
+  if (favMdl != null) {
+    const g = favMdl - favMkt;
+    if (g <= -7 && favMdl <= 60) s += ` Model has it closer (${favMdl}%), so live value on ${teamName(dog)}.`;
+    else if (g >= 7) s += ` Model rates ${teamName(fav)} even higher (${favMdl}%).`;
+  }
+  return s;
+}
+
+// the matchups that most deserve a decision: closest ties + biggest model-vs-market disagreements.
+function bracketKeyReads(br) {
+  if (!br || !br.rounds) return "";
+  const all = [];
+  br.rounds.forEach((r) => r.matchups.forEach((mu) => {
+    if (mu.winner || mu.mkt_a == null) return;
+    const closeness = Math.max(0, 22 - Math.abs(mu.mkt_a - 50));     // pick'em-ness
+    const disagree = mu.mdl_a == null ? 0 : Math.abs(mu.mdl_a - mu.mkt_a);
+    all.push({ mu, round: r.name, score: disagree * 2 + closeness });
+  }));
+  all.sort((a, b) => b.score - a.score);
+  const top = all.filter((x) => x.score > 6).slice(0, 5);
+  if (!top.length) return "";
+  const items = top.map(({ mu, round }) =>
+    `<li><b>${esc(teamName(mu.a))} v ${esc(teamName(mu.b))}</b> <span class="muted">${esc(round)}</span>: ${esc(matchupRead(mu))}</li>`).join("");
+  return `<div class="cal-note keyreads">${ico("analyze")}<div><b>Where the decisions are:</b> the closest ties and where our model disagrees with the sharp line (that is where your eye-test can add edge):<ul class="kr">${items}</ul></div></div>`;
 }
 
 function renderBracket(br) {
@@ -135,8 +174,8 @@ function renderBracket(br) {
     ? `<div class="bteam ${win ? "bwin" : ""}"><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`
     : `<div class="bteam tbd">TBD</div>`;
   const match = (mu) => {
-    const tie = mu.mkt_a == null ? "" : `<div class="btie" title="${esc(teamName(mu.a))} to win this tie (market / model)">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
-    return `<div class="bmatch ${mu.winner ? "done" : "pending"}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b)}${tie}</div>`;
+    const tie = mu.mkt_a == null ? "" : `<div class="btie">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
+    return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b)}${tie}</div>`;
   };
   const cols = br.rounds.map((r) => `<div class="bcol"><div class="bcol-h">${esc(r.name)}</div>${r.matchups.map(match).join("")}</div>`).join("");
   const champ = br.champion ? `<div class="bcol bcol-champ"><div class="bcol-h">Champion</div><div class="bmatch champ">${teamCell(br.champion, null, true)}</div></div>` : "";
