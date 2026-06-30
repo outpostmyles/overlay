@@ -90,6 +90,13 @@ FORECAST_MIN_N = 8                           # hide aggregate Brier/skill until 
 FORECAST_TOTAL_LINE = 2.5                     # total match goals over/under
 FORECAST_TEAM_LINE = 1.5                      # each team's goals over/under
 FORECAST_CORNERS_LINE = 9.5                   # total corners over/under (graded only with an API-Football key)
+# Performance-aware VARIANT (forward-graded experiment, never a replacement): regress a team's finishing
+# toward its shot-on-target VOLUME, so over-scorers get nudged down and under-scorers up. Emitted as a
+# parallel column on the goals legs and graded alongside the goals-only model; only the props, never the 1X2.
+PERF_SOT_TO_GOALS = 0.359                      # empirical league goals per shot-on-target
+PERF_BLEND_W = 0.5                             # how far to regress finishing toward SOT-implied (0 = off, 1 = full)
+PERF_RATIO_LO = 0.6                            # clamp the volume/finishing ratio so one blowout can't dominate
+PERF_RATIO_HI = 1.6
 
 # --- Server-side refresh heartbeat (for an always-on deployment) ---
 # When the app runs headless on a server (no browser polling /api/snapshot), this in-process tick keeps

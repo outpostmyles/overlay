@@ -290,24 +290,91 @@ def _parse_iso(s: str | None) -> datetime | None:
         return None
 
 
-def _predict_legs(model, corner_rates, a: str, b: str) -> list[dict]:
+def _possession_shares(results: list) -> dict:
+    """{team_key: average possession fraction} from ESPN box scores across finished games. Feeds the
+    corners projection (possession is a sticky team trait that correlates with corners ~+0.6)."""
+    agg: dict = {}
+    for g in (results or []):
+        for tk, b in (g.get("box") or {}).items():
+            p = b.get("possession") if isinstance(b, dict) else None
+            if p is None:
+                continue
+            d = agg.setdefault(tk, [0.0, 0])
+            d[0] += p
+            d[1] += 1
+    return {tk: d[0] / d[1] for tk, d in agg.items() if d[1] > 0}
+
+
+def _perf_mult(results: list) -> dict:
+    """{team_key: lambda multiplier} that regresses each team's group-stage FINISHING toward its shot-on-
+    target VOLUME. A team that out-scored its SOT volume (clinical) is nudged DOWN toward the mean; one that
+    under-scored its volume (wasteful, lots of SOT, few goals) is nudged UP. Volume is the sticky signal;
+    finishing is mostly noise, so this corrects the goals-only lambda without trusting a 3-game finishing rate."""
+    agg: dict = {}
+    for g in (results or []):
+        box = g.get("box") or {}
+        goals = g.get("goals") or {}
+        for tk, b in box.items():
+            sot = b.get("sot") if isinstance(b, dict) else None
+            gf = goals.get(tk)
+            if sot is None or gf is None:
+                continue
+            d = agg.setdefault(tk, [0.0, 0.0, 0])
+            d[0] += gf
+            d[1] += sot
+            d[2] += 1
+    out: dict = {}
+    for tk, (gf, sot, n) in agg.items():
+        if n <= 0:
+            continue
+        implied = (sot / n) * config.PERF_SOT_TO_GOALS          # volume-implied goals/game
+        ratio = implied / max(gf / n, 0.5)                       # >1 = under-finished its volume
+        ratio = max(config.PERF_RATIO_LO, min(config.PERF_RATIO_HI, ratio))
+        out[tk] = 1.0 + config.PERF_BLEND_W * (ratio - 1.0)
+    return out
+
+
+def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
+                  perf: dict | None = None) -> list[dict]:
     """The model's pick on each extra market for a game: total goals, each team's goals, and both-teams-to-
     score all come from one Dixon-Coles scoreline matrix (so they are mutually consistent); corners come
-    from the separate corners model. Each leg carries our side, the line, our confidence, and the projected
-    number. Graded later in paper.settle_forecasts (corners only when an API-Football key supplies counts)."""
+    from the separate corners model, now nudged by each side's MEASURED possession (ESPN). When a `perf`
+    multiplier is supplied, the goals legs also carry a parallel performance-aware projection (finishing
+    regressed toward SOT volume) for the Model Ledger to grade forward against the goals-only one."""
     legs: list[dict] = []
     mk = model.market_probs(a, b, config.FORECAST_TOTAL_LINE, config.FORECAST_TEAM_LINE) if model else None
     if mk:
-        def ou(p, line, proj, key, team=None):
-            return {"key": key, "side": "over" if p >= 0.5 else "under", "line": line, "team": team,
-                    "prob": round(max(p, 1 - p), 3), "proj": round(proj, 2)}
-        legs.append(ou(mk["total_over"], mk["total_line"], mk["exp_a"] + mk["exp_b"], "total_goals"))
-        legs.append(ou(mk["a_over"], mk["team_line"], mk["exp_a"], "team_total", team=a))
-        legs.append(ou(mk["b_over"], mk["team_line"], mk["exp_b"], "team_total", team=b))
+        mk_perf = None
+        if perf:
+            ma, mb = perf.get(a, 1.0), perf.get(b, 1.0)
+            if ma != 1.0 or mb != 1.0:
+                mk_perf = ratings.markets_from_lambdas(mk["exp_a"] * ma, mk["exp_b"] * mb,
+                                                       config.FORECAST_TOTAL_LINE, config.FORECAST_TEAM_LINE)
+
+        def ou(p, line, proj, key, team=None, p_perf=None, proj_perf=None):
+            leg = {"key": key, "side": "over" if p >= 0.5 else "under", "line": line, "team": team,
+                   "prob": round(max(p, 1 - p), 3), "proj": round(proj, 2)}
+            if p_perf is not None:
+                leg["perf_side"] = "over" if p_perf >= 0.5 else "under"
+                leg["perf_prob"] = round(max(p_perf, 1 - p_perf), 3)
+                leg["perf_proj"] = round(proj_perf, 2)
+            return leg
+        legs.append(ou(mk["total_over"], mk["total_line"], mk["exp_a"] + mk["exp_b"], "total_goals",
+                       p_perf=mk_perf and mk_perf["total_over"],
+                       proj_perf=mk_perf and (mk_perf["exp_a"] + mk_perf["exp_b"])))
+        legs.append(ou(mk["a_over"], mk["team_line"], mk["exp_a"], "team_total", team=a,
+                       p_perf=mk_perf and mk_perf["a_over"], proj_perf=mk_perf and mk_perf["exp_a"]))
+        legs.append(ou(mk["b_over"], mk["team_line"], mk["exp_b"], "team_total", team=b,
+                       p_perf=mk_perf and mk_perf["b_over"], proj_perf=mk_perf and mk_perf["exp_b"]))
         legs.append({"key": "btts", "side": "yes" if mk["btts"] >= 0.5 else "no", "line": None,
                      "team": None, "prob": round(max(mk["btts"], 1 - mk["btts"]), 3), "proj": None})
     if corner_rates is not None:
-        _, _, tot = corners.project_total(a, b, corner_rates)
+        share = None                                  # team A's expected possession share, from measured rates
+        if poss:
+            pa, pb = poss.get(a), poss.get(b)
+            if pa is not None and pb is not None and (pa + pb) > 0:
+                share = pa / (pa + pb)
+        _, _, tot = corners.project_total(a, b, corner_rates, share)
         line = config.FORECAST_CORNERS_LINE
         p = corners.over_prob(tot, line)
         legs.append({"key": "corners", "side": "over" if p >= 0.5 else "under", "line": line,
@@ -316,7 +383,7 @@ def _predict_legs(model, corner_rates, a: str, b: str) -> list[dict]:
 
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
-                    now: datetime, corner_rates=None) -> tuple[list[dict], dict]:
+                    now: datetime, corner_rates=None, poss=None, perf=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -364,7 +431,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)),
             "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
             "sources": sources,
-            "legs": _predict_legs(model, corner_rates, a, b),
+            "legs": _predict_legs(model, corner_rates, a, b, poss, perf),
         }
     return cands, board
 
@@ -1340,11 +1407,17 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     lineups = await get_lineups(matchups, force=force)   # confirmed XIs for today's games (free)
     picks_board = picks.generate(markets, props, model, config, smart)
 
-    # corners — a dominance market handled like any other bet: project total + per-team from
-    # accumulated team rates (opponent + possession adjusted), priced against the de-vigged book total
-    # line. The lines ride the normal Odds refresh (near slate only, to bound credits); +EV reads then
-    # flow into Best Bets and auto-log to the ledger just like favorites/props.
-    corner_rates = corners.build_team_corner_rates()
+    # Finished games (goals + free ESPN box stats: possession, corners, shots, SOT). Fetched here so the
+    # corners model and the prediction sheet can use measured territory/volume. Cached, reused below.
+    results = await get_results(force=force)
+    poss_shares = _possession_shares(results)
+    perf_mult = _perf_mult(results)              # forward-graded performance-aware variant (finishing -> SOT volume)
+
+    # corners: a dominance market handled like any other bet: project total + per-team from accumulated
+    # team rates (opponent + possession adjusted), priced against the de-vigged book total line. Corner
+    # rates now merge the API-Football cache (keyed, partial) with free ESPN box scores (every team).
+    corner_rates = {**corners.build_team_corner_rates(),
+                    **corners.rates_from_results(results)}
     corner_lines = await get_corner_lines(refresh=refresh_odds, matchups=matchups)
     odds_meta["credits_remaining"] = _odds_state["credits_remaining"]   # corners spent after odds_meta was built
     odds_meta["credits_low"] = (odds_meta["credits_remaining"] is not None
@@ -1352,8 +1425,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     picks_board["corners"] = _corners_board(matchups, corner_rates, corner_lines, model)
 
     # Futures: tournament sim (second opinion) vs the de-vigged Polymarket winner/group-winner line.
-    # Fetch results up front so the sim locks in already-played group games (cached, reused below).
-    results = await get_results(force=force)
+    # (results fetched above so the sim locks in already-played group games.)
     team_stats = await get_team_stats(results)   # corner counts: corner-bet settle AND forecast-leg grading
     _fb = await get_futures(markets, model, results)
     # settle logged leans (capture the moving close + resolve decided stages) then attach them fresh each
@@ -1376,7 +1448,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                              and len((m.commence_time or "").replace("-", "")) >= 8})
             fkicks = await get_kickoffs(fdates)
             fcands, fboard = _forecast_board(markets, model, fkicks,
-                                             config.FORECAST_LOCK_BUFFER_MINUTES, now_utc, corner_rates)
+                                             config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
+                                             corner_rates, poss_shares, perf_mult)
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)

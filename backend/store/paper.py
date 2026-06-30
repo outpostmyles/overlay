@@ -721,7 +721,11 @@ def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, co
             if corners_total is not None:
                 actual = corners_total
                 result = _ou_result(side, actual, line)
-        out.append({**leg, "actual": actual, "result": result})
+        graded = {**leg, "actual": actual, "result": result}
+        # forward-graded performance-aware variant: grade its over/under against the same goals result
+        if leg.get("perf_side") and k in ("total_goals", "team_total") and actual is not None:
+            graded["perf_result"] = _ou_result(leg["perf_side"], actual, line)
+        out.append(graded)
     return out
 
 

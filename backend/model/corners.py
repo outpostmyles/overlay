@@ -59,6 +59,26 @@ def build_team_corner_rates() -> dict:
     return out
 
 
+def rates_from_results(results: list) -> dict:
+    """{team_key: {cf, ca, games}} from ESPN box-score corners across finished games. ESPN reports
+    wonCorners for EVERY team (the API-Football cache covers only the teams it has a key+budget for), so
+    this is the broader, free source. Merged over the API-Football rates in the aggregator."""
+    agg: dict = {}
+    for g in (results or []):
+        box = g.get("box") or {}
+        teams = [t for t, b in box.items() if isinstance(b, dict) and b.get("corners") is not None]
+        if len(teams) != 2:
+            continue
+        x, y = teams
+        for tk, opp in ((x, y), (y, x)):
+            a = agg.setdefault(tk, {"cf": 0.0, "ca": 0.0, "games": 0})
+            a["cf"] += box[tk].get("corners") or 0
+            a["ca"] += box[opp].get("corners") or 0
+            a["games"] += 1
+    return {tk: {"cf": a["cf"] / a["games"], "ca": a["ca"] / a["games"], "games": a["games"]}
+            for tk, a in agg.items() if a["games"] > 0}
+
+
 def _shrink(measured, games) -> float:
     """Shrink a measured per-game rate toward the league prior by games played."""
     if measured is None or games <= 0:

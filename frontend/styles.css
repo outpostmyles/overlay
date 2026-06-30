@@ -485,6 +485,7 @@ input::placeholder { color: var(--muted); }
 .fcard-brier { font: 10px var(--font-mono); margin-top: 7px; }
 .leg-acc { font-size: 11.5px; margin-right: 2px; }
 .leg-acc b { color: var(--text); }
+.perf-tag { font: 9.5px var(--font-mono); color: var(--accent2); background: rgba(90,169,255,.10); border-radius: 4px; padding: 1px 4px; white-space: nowrap; }
 
 /* responsive: collapse rail to icons */
 @media (max-width: 900px) {

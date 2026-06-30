@@ -190,6 +190,59 @@ def test_corners_leg_fills_in_after_settlement():
     os.unlink(config.DB_PATH)
 
 
+# --- performance-quality upgrade: ESPN box stats, possession, perf variant ---------------- #
+def test_box_stats_extraction():
+    from backend.sources import espn
+    summary = {"boxscore": {"teams": [
+        {"team": {"displayName": "Germany"}, "statistics": [
+            {"name": "possessionPct", "displayValue": "75.3"},
+            {"name": "wonCorners", "displayValue": "16"},
+            {"name": "totalShots", "displayValue": "21"},
+            {"name": "shotsOnTarget", "displayValue": "6"},
+            {"name": "foulsCommitted", "displayValue": "18"}]},
+        {"team": {"displayName": "Paraguay"}, "statistics": [
+            {"name": "possessionPct", "displayValue": "24.7"},
+            {"name": "wonCorners", "displayValue": "6"}]}]}}
+    box = espn._box_stats(summary)
+    assert box["germany"] == {"possession": 0.753, "corners": 16.0, "shots": 21.0, "sot": 6.0}
+    assert box["paraguay"]["possession"] == 0.247 and box["paraguay"]["corners"] == 6.0
+
+
+def test_corner_rates_from_espn_box():
+    from backend.model import corners
+    results = [
+        {"box": {"spain": {"corners": 9}, "austria": {"corners": 3}}},
+        {"box": {"spain": {"corners": 7}, "germany": {"corners": 5}}},
+    ]
+    rates = corners.rates_from_results(results)
+    assert rates["spain"]["games"] == 2
+    assert rates["spain"]["cf"] == 8.0          # (9 + 7) / 2 corners for
+    assert rates["spain"]["ca"] == 4.0          # (3 + 5) / 2 conceded
+
+
+def test_perf_mult_regresses_finishing_toward_volume():
+    from backend import aggregator
+    # x out-scored its shot volume (clinical) -> nudged DOWN; y under-scored its volume -> nudged UP
+    results = [{"goals": {"x": 3, "y": 0}, "box": {"x": {"sot": 3.0}, "y": {"sot": 6.0}}}]
+    pm = aggregator._perf_mult(results)
+    assert pm["x"] < 1.0          # 3 goals on 3 SOT is way over the 0.359/SOT rate -> regress down
+    assert pm["y"] > 1.0          # 0 goals on 6 SOT is way under -> regress up
+
+
+def test_perf_variant_graded_alongside_goals_only():
+    paper = _fresh_paper()
+    key = "fc|2026-07-04|brazil|japan"
+    paper.log_forecasts([_cand("brazil", "japan", "2026-07-04")], today="2026-06-29")
+    legs = [{"key": "total_goals", "side": "over", "line": 2.5, "team": None, "prob": 0.55, "proj": 2.8,
+             "perf_side": "under", "perf_prob": 0.56, "perf_proj": 2.3}]
+    paper.lock_forecasts(_board(key, lock_now=True, legs=legs), "2026-07-04T17:45:00Z")
+    # actual 2 goals: Under wins, Over loses -> goals-only lost, perf-aware won
+    paper.settle_forecasts([{"date": "2026-07-04", "goals": {"brazil": 2, "japan": 0}, "winner": "brazil"}], None)
+    leg = paper.list_forecasts()[0]["legs"][0]
+    assert leg["result"] == "lost" and leg["perf_result"] == "won"
+    os.unlink(config.DB_PATH)
+
+
 def test_aggregate_scores_are_gated_until_min_n():
     paper = _fresh_paper()
     config.FORECAST_MIN_N = 3

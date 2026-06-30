@@ -112,6 +112,35 @@ def _iso(yyyymmdd: str) -> str:
     return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
 
 
+_BOX_FIELDS = {"possessionPct": "possession", "wonCorners": "corners",
+               "totalShots": "shots", "shotsOnTarget": "sot"}
+
+
+def _box_stats(summary: dict) -> dict:
+    """{team_key: {possession(0-1), corners, shots, sot}} from a match summary box score (or {}).
+    Possession is stored as a fraction; the rest are raw counts. Free territory/volume signal for the
+    corners + performance-aware projections (there is no xG anywhere in ESPN, so this is the dominance read)."""
+    from ..matching import normalize_team
+    out: dict = {}
+    for tm in ((summary.get("boxscore") or {}).get("teams") or []):
+        tk = normalize_team(((tm.get("team") or {}).get("displayName")) or "")
+        if not tk:
+            continue
+        d: dict = {}
+        for st in (tm.get("statistics") or []):
+            key = _BOX_FIELDS.get(st.get("name"))
+            if not key:
+                continue
+            try:
+                v = float(st.get("displayValue"))
+            except (TypeError, ValueError):
+                continue
+            d[key] = v / 100.0 if key == "possession" else v
+        if d:
+            out[tk] = d
+    return out
+
+
 async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dict]:
     """Finished-game results for settling parlay legs: per game {date, goals{team_key:int},
     scorers:set(normalized names)}. Goals come from the final score; scorers from keyEvents
@@ -130,10 +159,11 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             if not (((ev.get("status") or {}).get("type") or {}).get("completed")):
                 continue
             eid = str(ev.get("id") or "")
-            if eid in cache:                       # finished game already summarized — no /summary re-fetch
-                c = cache[eid]
+            if eid in cache and "box" in cache[eid]:   # finished + box already extracted, no /summary re-fetch
+                c = cache[eid]                          # (entries cached before box existed fall through to backfill)
                 out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
-                            "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or [])})
+                            "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
+                            "box": c.get("box") or {}})
                 continue
             try:
                 comp = ev["competitions"][0]["competitors"]
@@ -153,6 +183,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 continue
             scorers: set = set()
             played: set = set()
+            box: dict = {}
             try:
                 s = (await client.get(f"{_BASE}/summary", params={"event": ev["id"]}, timeout=15)).json()
                 for ke in (s.get("keyEvents") or []):
@@ -171,13 +202,14 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                             nm = (p.get("athlete") or {}).get("displayName")
                             if nm:
                                 played.add(normalize_team(nm))
+                box = _box_stats(s)
                 cache[eid] = {"date": _iso(d), "goals": goals, "winner": winner,
-                              "scorers": sorted(scorers), "played": sorted(played)}
+                              "scorers": sorted(scorers), "played": sorted(played), "box": box}
                 new_cached += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
             out.append({"date": _iso(d), "goals": goals, "winner": winner,
-                        "scorers": scorers, "played": played})
+                        "scorers": scorers, "played": played, "box": box})
     if new_cached:
         _save_results_cache(cache)
         print(f"[espn] memoized {new_cached} finished game(s); {len(cache)} cached total")

@@ -132,13 +132,27 @@ const _predActual = (l) => l.result === "pending" ? "awaiting"
 function _predRowsInner(legs, graded) {
   return (legs || []).map((l) => {
     const name = `<span class="pred-l">${esc(_predName(l))}</span>`;
+    const perfDiff = l.perf_side && l.perf_side !== l.side;   // show the variant only when it disagrees
     if (!graded) {
-      return `<div class="pred">${name}<span class="pred-g">${esc(_predGuess(l))}</span><span class="pred-c">${Math.round((l.prob || 0) * 100)}%</span></div>`;
+      const perf = perfDiff ? ` <span class="perf-tag" title="performance-aware variant, graded forward">perf ${l.perf_side === "over" ? "O" : "U"}${l.line}</span>` : "";
+      return `<div class="pred">${name}<span class="pred-g">${esc(_predGuess(l))}${perf}</span><span class="pred-c">${Math.round((l.prob || 0) * 100)}%</span></div>`;
     }
     const r = l.result;
     const mark = r === "won" ? '<span class="pred-ok">✓</span>' : r === "lost" ? '<span class="pred-no">✗</span>' : '<span class="muted">·</span>';
-    return `<div class="pred ${r === "won" ? "pred-won" : r === "lost" ? "pred-lost" : ""}">${name}<span class="pred-g">${esc(_predPick(l))}</span><span class="pred-a">${esc(_predActual(l))} ${mark}</span></div>`;
+    const pm = (perfDiff && l.perf_result) ? ` <span class="perf-tag" title="perf-aware variant">perf ${l.perf_result === "won" ? "✓" : l.perf_result === "lost" ? "✗" : "·"}</span>` : "";
+    return `<div class="pred ${r === "won" ? "pred-won" : r === "lost" ? "pred-lost" : ""}">${name}<span class="pred-g">${esc(_predPick(l))}</span><span class="pred-a">${esc(_predActual(l))} ${mark}${pm}</span></div>`;
   }).join("");
+}
+// forward scoreboard: goals-only model vs the perf-aware variant on the goals legs that carry both
+function _perfScore(settled) {
+  let go = 0, gn = 0, po = 0;
+  settled.forEach((r) => (r.legs || []).forEach((l) => {
+    if (l.perf_result && (l.result === "won" || l.result === "lost") && (l.key === "total_goals" || l.key === "team_total")) {
+      gn++; if (l.result === "won") go++; if (l.perf_result === "won") po++;
+    }
+  }));
+  if (gn < 1) return "";
+  return `<div class="cal-note muted">Model variant test (goals legs): goals-only <b>${go}/${gn}</b> vs perf-aware <b>${po}/${gn}</b>. A forward-graded experiment (finishing regressed toward shot volume); not yet conclusive.</div>`;
 }
 // per-prop prediction list inside a card: upcoming shows our guess + confidence; settled shows pick vs actual
 function _predRows(legs, graded) {
@@ -231,7 +245,7 @@ function renderLedger() {
   let settledHtml = "";
   if (settled.length) {
     settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· what we predicted vs what happened, every line marked right or wrong; the 1X2 also scores the model against the market frozen at the same instant</span></h3>
-      ${_legAccuracy(settled)}
+      ${_legAccuracy(settled)}${_perfScore(settled)}
       <div class="fgrid">${settled.map(_settledCard).join("")}</div></div>`;
   }
   const empty = (!cards.length && !settled.length)

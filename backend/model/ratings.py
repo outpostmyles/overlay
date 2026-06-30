@@ -93,36 +93,42 @@ class MatchModel:
         lam = self._lambdas(a, b)
         if not lam:
             return None
-        la, lb = lam
-        pa = [_poisson(i, la) for i in range(MAX_GOALS + 1)]
-        pb = [_poisson(j, lb) for j in range(MAX_GOALS + 1)]
-        home = draw = away = tot_over = a_over = b_over = btts = norm = 0.0
-        for i in range(MAX_GOALS + 1):
-            for j in range(MAX_GOALS + 1):
-                p = pa[i] * pb[j] * _dc_tau(i, j, la, lb, DC_RHO)
-                norm += p
-                if i > j:
-                    home += p
-                elif i == j:
-                    draw += p
-                else:
-                    away += p
-                if i + j > total_line:
-                    tot_over += p
-                if i > team_line:
-                    a_over += p
-                if j > team_line:
-                    b_over += p
-                if i > 0 and j > 0:
-                    btts += p
-        if norm <= 0:
-            return None
-        return {
-            "home": home / norm, "draw": draw / norm, "away": away / norm,
-            "total_over": tot_over / norm, "a_over": a_over / norm,
-            "b_over": b_over / norm, "btts": btts / norm,
-            "exp_a": la, "exp_b": lb, "total_line": total_line, "team_line": team_line,
-        }
+        return markets_from_lambdas(lam[0], lam[1], total_line, team_line)
+
+
+def markets_from_lambdas(la: float, lb: float, total_line: float = 2.5,
+                         team_line: float = 1.5) -> dict:
+    """Derive all goals markets from a pair of expected-goals rates via the DC-corrected scoreline matrix.
+    Factored out of market_probs so a performance-aware lambda variant can reuse the exact same math."""
+    pa = [_poisson(i, la) for i in range(MAX_GOALS + 1)]
+    pb = [_poisson(j, lb) for j in range(MAX_GOALS + 1)]
+    home = draw = away = tot_over = a_over = b_over = btts = norm = 0.0
+    for i in range(MAX_GOALS + 1):
+        for j in range(MAX_GOALS + 1):
+            p = pa[i] * pb[j] * _dc_tau(i, j, la, lb, DC_RHO)
+            norm += p
+            if i > j:
+                home += p
+            elif i == j:
+                draw += p
+            else:
+                away += p
+            if i + j > total_line:
+                tot_over += p
+            if i > team_line:
+                a_over += p
+            if j > team_line:
+                b_over += p
+            if i > 0 and j > 0:
+                btts += p
+    if norm <= 0:
+        return None
+    return {
+        "home": home / norm, "draw": draw / norm, "away": away / norm,
+        "total_over": tot_over / norm, "a_over": a_over / norm,
+        "b_over": b_over / norm, "btts": btts / norm,
+        "exp_a": la, "exp_b": lb, "total_line": total_line, "team_line": team_line,
+    }
 
 
 def _poisson(k: int, lam: float) -> float:
