@@ -54,7 +54,7 @@ projected_per_game = player_per90_rate * matchup_context * (expected_minutes / 9
 P(over line)       = Poisson survival at the line
 ```
 
-The per-90 rate is the player's measured rate (accumulated from API-Football) shrunk toward a positional prior by games played, so it is robust early in the tournament and sharpens as games bank. The matchup context is where the opponent enters: shots, shots on target, and goals scale with the team's expected goals versus that specific defense; passes scale with projected possession share; corners scale with projected dominance against the opponent's corners-conceded rate. Pass volume is deliberately not priced until there is real measured data, because the coarse positional prior cannot tell a deep metronome from an attacking midfielder.
+The per-90 rate is the player's measured rate (accumulated from API-Football) shrunk toward a positional prior by games played, so it is robust early in the tournament and sharpens as games bank. The matchup context is where the opponent enters: shots, shots on target, and goals scale with the team's expected goals versus that specific defense; passes scale with projected possession share; corners scale with projected dominance against the opponent's corners-conceded rate, nudged by each side's measured possession share from free ESPN box scores (possession is a sticky team trait that tracks corners). Pass volume is deliberately not priced until there is real measured data, because the coarse positional prior cannot tell a deep metronome from an attacking midfielder.
 
 ### An honestly backtested match model
 An independent Poisson / Dixon-Coles rating model is trained on roughly 9,000 international results since 2017. Team strengths are opponent-adjusted by a deterministic fixed-point iteration (a team's attack is its goals scored relative to the strength of the defenses it actually faced), so beating up weak opponents no longer inflates a rating. It is validated on a time-split holdout and scored on Brier score, log loss, and ranked probability score against naive baselines, with documented avoidance of data leakage; the opponent adjustment is a measured out-of-sample gain (about 8% better Brier, 10% better RPS) over raw goal-average ratings. It is presented as a second opinion, not a market-beater; the model README is candid that a simple ratings model does not beat a sharp closing line. See `backend/model/README.md`.
@@ -135,7 +135,8 @@ Working and in active personal use:
 - web-grounded AI match verdicts (manual trigger),
 - a full settlement and CLV loop with a bankroll curve and by-archetype record,
 - a de-vigged knockout futures board with a Monte Carlo bracket as the second opinion,
-- a pre-kickoff forecast ledger that grades the model against the market on Brier score and ranked probability score.
+- a pre-kickoff forecast ledger that grades the model against the market on Brier score and ranked probability score,
+- a forward-graded performance-aware variant on the goals forecasts (finishing regressed toward shot-on-target volume), logged as a parallel column in the forecast ledger and never touching the 1X2.
 
 Scope: the 2026 FIFA World Cup only. The prediction-market and stats sources, the team model, and the bet archetypes are all World Cup specific; the tool has not been pointed at any other event or sport.
 

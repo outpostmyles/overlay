@@ -444,12 +444,25 @@ function renderBestBets(p) {
        <div class="fade-grid">${fades.map(fadeCard).join("")}</div></div>`
     : "";
 
-  box.innerHTML = `<h2 class="ai-h">${ico("picks")} Best bets <span class="muted">· ranked, with reasoning</span></h2>${chips}${grid}${fadeHtml}`;
+  // honesty: the prop board is a last-good fallback while PrizePicks throttles; say how old it really
+  // is instead of letting the snapshot timestamp imply the lines are live
+  const meta = (state.snapshot && state.snapshot.meta) || {};
+  const ageS = meta.props_age_seconds;
+  const propCards = bb.some((c) => c.archetype !== "favorite_ml" && c.archetype !== "total_corners");
+  const staleBanner = (propCards && ageS != null && ageS > 4 * 3600)
+    ? `<div class="cal-note">${ico("shield")} Prop lines last fetched <b>${Math.round(ageS / 3600)}h ago</b> (PrizePicks is rate-limiting; serving the last good board). Check the live line before betting a prop.</div>`
+    : "";
+
+  box.innerHTML = `<h2 class="ai-h">${ico("picks")} Best bets <span class="muted">· ranked, with reasoning</span></h2>${staleBanner}${chips}${grid}${fadeHtml}`;
 }
 
 function betCard(c) {
   const srcLabel = { ai: "AI reasoned", read: "quick read", model: "model" }[c.source] || c.source;
   const right = c.confidence ? confMeter(c.confidence) : (c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : "");
+  // model-vs-market disagreement chip (favorite ML cards carry both), same threshold as the Ledger
+  const gap = (c.market_prob != null && c.model_prob != null)
+    ? Math.round(Math.abs(c.market_prob - c.model_prob) * 100) : 0;
+  const gapChip = gap >= 8 ? ` <span class="tag gap" title="model and market disagree by ${gap}pp on this favorite">Δ${gap}pp</span>` : "";
   const trap = c.trap ? '<span class="ob demon">trap</span>' : "";
   const price = c.best_american != null
     ? `<div class="bc-price">${ico("best")} best <b>${sgn(c.best_american)}</b> @ ${esc(c.best_book)}${c.ev_pct != null ? ` <span class="ev ${c.ev_pct > 0 ? "pos" : c.ev_pct < 0 ? "neg" : ""}">${c.ev_pct > 0 ? "+" : ""}${c.ev_pct}% vs fair</span>` : ""}</div>`
@@ -463,7 +476,7 @@ function betCard(c) {
     ? `<details class="ai-research"><summary>${ico("chevron", "ico ico-chev")} situational brief</summary><div class="body">${mdLite(c.research)}</div></details>` : "";
   return `<div class="card bet-card">
     <div class="bc-top"><span class="tag">${esc((c.archetype || "").replace(/_/g, " "))}</span><span class="bc-src ${c.source}">${srcLabel}</span><span class="bc-r">${right}</span></div>
-    <div class="bc-sel">${esc(c.selection)} ${trap}</div>
+    <div class="bc-sel">${esc(c.selection)}${gapChip} ${trap}</div>
     <div class="bc-meta">${esc(c.match || "")}${c.days_out != null ? " · " + dateLabel(c.days_out) : ""}</div>
     <div class="bc-why">${mdLite(c.reasoning || "")}</div>
     ${price}${model}${stake}${mem}${research}
@@ -904,10 +917,34 @@ document.addEventListener("click", async (e) => {
   const fv = e.target.closest("[data-fview]");
   if (fv) { localStorage.setItem("overlay_futures_view", fv.dataset.fview); renderFutures(); return; }
   const sc = e.target.closest("[data-scen-clear]");
-  if (sc) { state.scenario = { pins: [], deltas: [] }; renderFutures(); return; }
+  if (sc) { state.scenario = { pins: [], deltas: [] }; _savePins(); renderFutures(); return; }
   const pn = e.target.closest("[data-pin-w]");
   if (pn) { toggleScenarioPin(pn.dataset.pinA, pn.dataset.pinB, pn.dataset.pinW); return; }
 });
+
+// scenario pins survive a refresh (pins only; deltas are relative to the sim baseline at POST time, so
+// they are always recomputed against the CURRENT bracket, never restored stale)
+function _savePins() {
+  try { localStorage.setItem("overlay_scenario_pins", JSON.stringify((state.scenario || {}).pins || [])); }
+  catch (err) { /* storage full/blocked: pins just won't persist */ }
+}
+function _loadPins() {
+  try {
+    const pins = JSON.parse(localStorage.getItem("overlay_scenario_pins") || "[]");
+    if (Array.isArray(pins) && pins.length) { state.scenario.pins = pins; return true; }
+  } catch (err) { /* corrupt entry: ignore */ }
+  return false;
+}
+async function _refreshScenario() {
+  try {
+    const r = await getJSON("/api/futures/scenario", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pins: state.scenario.pins }) });
+    state.scenario.deltas = r.deltas || [];
+    state.scenario.pins = (r.pins && r.pins.length) ? r.pins : state.scenario.pins;   // backend drops pins it can't apply
+    _savePins();
+    renderFutures();
+  } catch (err) { /* keep the optimistic pins; deltas just stay empty */ }
+}
 
 // pin a knockout tie's winner and ask the backend how the model's deep-run odds shift. The pin is a
 // hypothetical, so this only moves the model sim (the market can't be re-priced for a what-if).
@@ -921,15 +958,10 @@ async function toggleScenarioPin(a, b, winner) {
   } else {
     state.scenario.pins = state.scenario.pins.filter((p) => !same(p)).concat([{ a, b, winner }]);
   }
+  _savePins();
   renderFutures();   // optimistic: show the pin immediately, fill deltas when the sim returns
   if (!state.scenario.pins.length) { state.scenario.deltas = []; renderFutures(); return; }
-  try {
-    const r = await getJSON("/api/futures/scenario", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pins: state.scenario.pins }) });
-    state.scenario.deltas = r.deltas || [];
-    state.scenario.pins = (r.pins && r.pins.length) ? r.pins : state.scenario.pins;   // backend drops pins it can't apply
-    renderFutures();
-  } catch (err) { /* keep the optimistic pin; deltas just stay empty */ }
+  await _refreshScenario();
 }
 
 // hide-chalk toggle (delegated; persists across re-renders via the body class)
@@ -953,7 +985,8 @@ document.addEventListener("click", (e) => {
 });
 
 // ---------- boot ----------
-loadSnapshot();
+const _hadPins = _loadPins();   // restore scenario pins from a prior visit (deltas recompute fresh)
+loadSnapshot().then(() => { if (_hadPins && state.scenario.pins.length) _refreshScenario(); });
 // auto-refresh, but never yank the UI out from under an open read: skip the cycle while the user has
 // a situational brief or a per-prop Read row expanded (they'll get fresh data on the next tick).
 setInterval(() => {

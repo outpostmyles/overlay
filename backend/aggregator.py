@@ -23,7 +23,8 @@ from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi
 from .store import leans, paper
 
-_free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False}
+_free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
+                     "props_fresh": 0.0}   # wall-clock of the last real (non-fallback) props pull
 _sm_cache: dict = {"data": {}, "ts": 0.0}
 _resolved_cache: dict = {"data": [], "ts": 0.0}
 _lineup_cache: dict = {"data": {}, "ts": 0.0}
@@ -58,21 +59,23 @@ async def _fetch_free() -> tuple[list[Market], list[dict]]:
     return markets, props
 
 
-def _load_props_disk() -> list[dict]:
-    """Last-good PrizePicks board persisted from a prior run, so a restart that lands during a
-    Cloudflare/DataDome block still serves props instead of a blank board. Ignored if too stale."""
+def _load_props_disk() -> tuple[list[dict], float]:
+    """(last-good PrizePicks board, its saved_at wall-clock) persisted from a prior run, so a restart
+    that lands during a Cloudflare/DataDome block still serves props instead of a blank board. Ignored
+    if too stale. The timestamp rides along so the UI can say how old the board really is."""
     p = config.PROPS_CACHE_PATH
     if not p.exists():
-        return []
+        return [], 0.0
     try:
         d = json.loads(p.read_text())
-        age_days = (time.time() - (d.get("saved_at") or 0)) / 86400.0
+        saved = float(d.get("saved_at") or 0)
+        age_days = (time.time() - saved) / 86400.0
         if isinstance(d.get("props"), list) and age_days <= config.PROPS_MAX_STALE_DAYS:
             print(f"[aggregator] seeded {len(d['props'])} last-good props from disk ({age_days:.1f}d old)")
-            return d["props"]
+            return d["props"], saved
     except Exception as exc:  # noqa: BLE001
         print(f"[aggregator] props cache load failed: {exc}")
-    return []
+    return [], 0.0
 
 
 def _save_props_disk(props: list[dict]) -> None:
@@ -86,7 +89,7 @@ def _save_props_disk(props: list[dict]) -> None:
 
 async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
     if not _free_cache["loaded"]:
-        _free_cache["props"] = _load_props_disk()   # survive a restart during a PrizePicks block
+        _free_cache["props"], _free_cache["props_fresh"] = _load_props_disk()   # survive a restart mid-block
         _free_cache["loaded"] = True
     if (not force and _free_cache["ts"]
             and (time.monotonic() - _free_cache["ts"]) < config.CACHE_TTL_SECONDS):
@@ -94,12 +97,20 @@ async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
     markets, props = await _fetch_free()
     # keep last-good props if this pull came back empty (PrizePicks throttles intermittently) — don't
     # blank the whole prop board + SGP on a transient miss. A fresh board persists to disk so the
-    # last-good survives a process restart too.
+    # last-good survives a process restart too. The last-good ages out at PROPS_MAX_STALE_DAYS so an
+    # always-on host can't serve week-old lines forever, and props_fresh records when the board was
+    # actually fetched so the UI can say so.
     if not props and _free_cache["props"]:
-        print("[aggregator] props empty this pull — keeping last-good prop board")
-        props = _free_cache["props"]
+        age_days = (time.time() - (_free_cache.get("props_fresh") or 0)) / 86400.0
+        if age_days <= config.PROPS_MAX_STALE_DAYS:
+            print("[aggregator] props empty this pull — keeping last-good prop board")
+            props = _free_cache["props"]
+        else:
+            print(f"[aggregator] last-good props aged out ({age_days:.1f}d) — dropping the stale board")
+            _free_cache["props"] = []
     elif props:
         _save_props_disk(props)
+        _free_cache["props_fresh"] = time.time()
     _free_cache.update(markets=markets, props=props, ts=time.monotonic())
     return markets, props
 
@@ -225,23 +236,30 @@ _VS_RE = re.compile(r"\s+vs\.?\s+", re.IGNORECASE)
 async def get_kickoffs(dates: list[str]) -> dict:
     """{frozenset(team_keys): kickoff_iso} for the given YYYYMMDD dates (ESPN scoreboard, free, cached).
     Our markets only know the game DATE (Kalshi), so this supplies the real kickoff TIME used to order
-    same-day picks. Refetched when stale or when a not-yet-cached date is requested."""
+    same-day picks. Past kickoffs are immutable and kept forever; today/future dates expire on the TTL
+    (matchup keys are team pairs, so a TBD-vs-TBD tie resolving to real teams must refetch)."""
     need = {d for d in dates if d}
     now = time.monotonic()
     stale = (now - _kickoff_cache["ts"]) > config.RESULTS_CACHE_TTL
     if need and (stale or not need.issubset(_kickoff_cache["dates"])):
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            try:
-                fresh = await espn.fetch_kickoffs(client, sorted(need))
-            except Exception as exc:  # noqa: BLE001
-                print(f"[aggregator] kickoffs errored: {exc}")
-                fresh = {}
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
         if stale:
-            _kickoff_cache["map"], _kickoff_cache["dates"] = {}, set()   # drop expired entries
-        _kickoff_cache["map"].update(fresh)
-        _kickoff_cache["ts"] = now
-        covered = {iso[:10].replace("-", "") for iso in fresh.values() if iso}
-        _kickoff_cache["dates"] |= (need & covered)   # only mark a date done once ESPN actually returned it
+            # keep only strictly-past entries (finished games never change); drop today/future so they refresh
+            _kickoff_cache["map"] = {k: v for k, v in _kickoff_cache["map"].items()
+                                     if v and v[:10].replace("-", "") < today}
+            _kickoff_cache["dates"] = {d for d in _kickoff_cache["dates"] if d < today}
+            _kickoff_cache["ts"] = now
+        missing = sorted(need - _kickoff_cache["dates"])   # past dates fetch once ever; current always refetch
+        if missing:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                try:
+                    fresh = await espn.fetch_kickoffs(client, missing)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[aggregator] kickoffs errored: {exc}")
+                    fresh = {}
+            _kickoff_cache["map"].update(fresh)
+            covered = {iso[:10].replace("-", "") for iso in fresh.values() if iso}
+            _kickoff_cache["dates"] |= (need & covered)   # only mark a date done once ESPN actually returned it
     return _kickoff_cache["map"]
 
 
@@ -879,6 +897,7 @@ def _best_bets(picks_board: dict, best_lines: list[dict]) -> list[dict]:
             "source": "model", "archetype": "favorite_ml", "selection": f"{f['team']} ML",
             "match": f.get("event"), "days_out": f.get("days_out"), "confidence": None, "tier": "lean",
             "reasoning": f"{f['fair_prob'] * 100:.0f}% sharp fair{model_txt}",
+            "market_prob": f.get("fair_prob"), "model_prob": f.get("model_prob"),  # for the gap chip
             "tier_rank": 1, "score": f["fair_prob"] * 100,
             **_stake_fields(None, "lean"),
         }
@@ -1404,8 +1423,9 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # smart money — now match-level: whale backing on the actual games on the slate, not the
     # tournament-winner market. Derive the matchups (favorites scoped to the horizon) first.
     matchups = _slate_matchups(markets)
-    smart = await get_smart_money(matchups, force=force)
-    lineups = await get_lineups(matchups, force=force)   # confirmed XIs for today's games (free)
+    smart, lineups = await asyncio.gather(         # independent free sources (Polymarket / ESPN)
+        get_smart_money(matchups, force=force),
+        get_lineups(matchups, force=force))        # confirmed XIs for today's games
     picks_board = picks.generate(markets, props, model, config, smart)
 
     # Finished games (goals + free ESPN box stats: possession, corners, shots, SOT). Fetched here so the
@@ -1547,6 +1567,10 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             "ai_enabled": config.has_anthropic(),
             "ai_count": len(picks_board.get("ai", {})),
             "props_scanned": picks_board["counts"]["props_scanned"],
+            # age of the prop board's last REAL fetch (fallback boards keep the old stamp) so the UI can
+            # flag stale lines instead of implying they are as fresh as the snapshot
+            "props_age_seconds": (int(time.time() - _free_cache["props_fresh"])
+                                  if _free_cache.get("props_fresh") else None),
             "bankroll": config.BANKROLL,
             "kelly_fraction": config.KELLY_FRACTION,
         },

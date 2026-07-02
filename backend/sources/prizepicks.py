@@ -43,13 +43,12 @@ async def fetch() -> list[dict]:
         data = json.loads(out.decode())
     except Exception as exc:  # noqa: BLE001
         print(f"[prizepicks] fetch failed: {exc}")
-        _cooldown_until = time.monotonic() + _COOLDOWN_SECONDS
-        return []
+        return []                                 # transient network error: no cooldown, retry next tick
 
     # rate-limited responses come back HTTP 200 with an error envelope (no "data") — treat as a miss
     # so the caller keeps the last-good board instead of blanking it.
     if not isinstance(data, dict) or "data" not in data or data.get("error"):
-        print(f"[prizepicks] throttled — backing off {_COOLDOWN_SECONDS // 60} min ({str(data)[:80]})")
+        print(f"[prizepicks] throttled, backing off {_COOLDOWN_SECONDS // 60} min ({str(data)[:80]})")
         _cooldown_until = time.monotonic() + _COOLDOWN_SECONDS
         return []
 

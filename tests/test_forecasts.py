@@ -190,6 +190,23 @@ def test_corners_leg_fills_in_after_settlement():
     os.unlink(config.DB_PATH)
 
 
+# --- Dixon-Coles correction: guard that the low-score adjustment is actually applied ------- #
+def test_dixon_coles_tau_shape_and_effect(monkeypatch):
+    from backend.model import ratings
+    la, lb, rho = 1.4, 1.1, ratings.DC_RHO
+    # negative rho boosts the 0-0 / 1-1 draws, cuts the 0-1 / 1-0, leaves everything else alone
+    assert ratings._dc_tau(0, 0, la, lb, rho) > 1.0
+    assert ratings._dc_tau(1, 1, la, lb, rho) > 1.0
+    assert ratings._dc_tau(0, 1, la, lb, rho) < 1.0
+    assert ratings._dc_tau(1, 0, la, lb, rho) < 1.0
+    assert ratings._dc_tau(2, 0, la, lb, rho) == 1.0
+    # chain-level: removing the correction must visibly drop the draw probability
+    with_dc = ratings.markets_from_lambdas(la, lb)["draw"]
+    monkeypatch.setattr(ratings, "DC_RHO", 0.0)
+    without_dc = ratings.markets_from_lambdas(la, lb)["draw"]
+    assert with_dc > without_dc
+
+
 # --- UTC-midnight regression: late kickoffs whose market date lags a day ------------------ #
 def test_late_kickoff_survives_utc_midnight():
     """A game with commence_time 07-02 but kickoff 03:00Z on 07-03 must stay pending past UTC midnight,
