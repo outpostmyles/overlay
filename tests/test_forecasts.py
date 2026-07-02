@@ -190,6 +190,55 @@ def test_corners_leg_fills_in_after_settlement():
     os.unlink(config.DB_PATH)
 
 
+# --- UTC-midnight regression: late kickoffs whose market date lags a day ------------------ #
+def test_late_kickoff_survives_utc_midnight():
+    """A game with commence_time 07-02 but kickoff 03:00Z on 07-03 must stay pending past UTC midnight,
+    lock inside its window, and never be voided pre-kickoff (the market date lags the kickoff by a day)."""
+    from datetime import datetime, timezone
+    from backend import aggregator
+    from backend.models import Market, Selection, Quote
+
+    paper = _fresh_paper()
+
+    def mk():
+        def sel(key, prob):
+            s = Selection(key=key, label=key, quotes=[Quote(source="kalshi", source_type="prediction",
+                          price_decimal=1 / prob, implied_prob=prob, mid_prob=prob)])
+            s.fair_prob = prob
+            return s
+        return Market(market_id="m1", event="A vs B", market_type="moneyline",
+                      selections=[sel("aaa", 0.45), sel("bbb", 0.28), sel("draw", 0.27)],
+                      commence_time="2026-07-02")
+
+    class M:
+        def match_probs(self, a, b): return {a: 0.4, "draw": 0.27, b: 0.33}
+        def market_probs(self, a, b, tl, teaml): return None
+
+    kicks = {frozenset(("aaa", "bbb")): "2026-07-03T03:00Z"}
+    cands, _ = aggregator._forecast_board([mk()], M(), kicks, 75,
+                                          datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc))
+    assert len(cands) == 1
+    paper.log_forecasts(cands, "2026-07-02")
+
+    # 00:30Z on 07-03: past UTC midnight, pre-window -> must NOT void, must NOT lock
+    now = datetime(2026, 7, 3, 0, 30, tzinfo=timezone.utc)
+    c2, b2 = aggregator._forecast_board([mk()], M(), kicks, 75, now)
+    assert len(c2) == 1                              # still a live candidate
+    paper.lock_forecasts(b2, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert paper.list_forecasts() == []              # still pending (not locked, not void)
+
+    # 02:00Z: inside the 01:45-03:00 window -> locks
+    now = datetime(2026, 7, 3, 2, 0, tzinfo=timezone.utc)
+    _, b3 = aggregator._forecast_board([mk()], M(), kicks, 75, now)
+    assert paper.lock_forecasts(b3, now.strftime("%Y-%m-%dT%H:%M:%SZ")) == 1
+
+    # kicked off: no NEW candidate is ever logged for a started game
+    now = datetime(2026, 7, 3, 3, 30, tzinfo=timezone.utc)
+    c4, b4 = aggregator._forecast_board([mk()], M(), kicks, 75, now)
+    assert c4 == [] and b4["fc|2026-07-02|aaa|bbb"]["missed"] is True
+    os.unlink(config.DB_PATH)
+
+
 # --- performance-quality upgrade: ESPN box stats, possession, perf variant ---------------- #
 def test_box_stats_extraction():
     from backend.sources import espn

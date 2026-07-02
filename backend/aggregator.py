@@ -407,23 +407,24 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
         if not mp:
             continue                              # model can't price both teams
         gdate = (m.commence_time or "")[:10]
-        if not gdate or gdate < today:
-            continue                              # forward-only
+        ko = kickoffs.get(frozenset((a, b)))
+        kdt = _parse_iso(ko)
+        # Forward-only, KICKOFF-aware: a game leaves the sheet only once it has actually kicked off. The
+        # market date can lag a late kickoff by a day (a 01:00-03:00Z kickoff carries the previous day's
+        # date), so a date-only check would drop live games at UTC midnight, hours before their lock
+        # window; the date check remains only as the fallback when ESPN has not posted a kickoff time.
+        if kdt is None and (not gdate or gdate < today):
+            continue
+        missed = bool(kdt) and now >= kdt
+        lock_now = bool(kdt) and (kdt - timedelta(minutes=buffer_min)) <= now < kdt
         ma, md, mb = teams[0].fair_prob, draw.fair_prob, teams[1].fair_prob
         tot = ma + md + mb
         if tot <= 0:
             continue
         dedup = f"fc|{gdate}|{a}|{b}"
-        cands.append({"match": m.event, "team_a": a, "team_b": b,
-                      "commence_time": gdate, "stage": None, "dedup_key": dedup})
-        ko = kickoffs.get(frozenset((a, b)))
-        kdt = _parse_iso(ko)
-        lock_now = missed = False
-        if kdt:
-            missed = now >= kdt
-            lock_now = (kdt - timedelta(minutes=buffer_min)) <= now < kdt
-        # no kickoff posted yet (ESPN hasn't published the time): stay pending and show in the live
-        # preview. A stale pending row whose date has passed is voided in paper.lock_forecasts instead.
+        if not missed:                             # never log a new pending row for a started game
+            cands.append({"match": m.event, "team_a": a, "team_b": b,
+                          "commence_time": gdate, "stage": None, "dedup_key": dedup})
         sources = ",".join(sorted({q.source for s in m.selections for q in s.quotes
                                    if q.source in config.SHARP_SOURCES}))
         board[dedup] = {

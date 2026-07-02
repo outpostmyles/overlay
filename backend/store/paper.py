@@ -16,6 +16,7 @@ import json
 import re
 import sqlite3
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 from .. import config
@@ -630,17 +631,23 @@ def _rps3(p: tuple, idx: int) -> float:
 
 def log_forecasts(candidates: list[dict], today: str) -> int:
     """Insert a PENDING forecast row per upcoming game (probabilities are NOT stored yet; they freeze at
-    lock). Forward-only: refuses any game whose date is not >= today, so a played game can never be
-    backfilled (the live model has ingested played results; a backfill would be hindsight). Idempotent via
+    lock). Forward-only backstop: refuses any game dated before yesterday, so a played game can never be
+    backfilled (the live model has ingested played results; a backfill would be hindsight). The primary
+    kicked-off filter is kickoff-aware in the aggregator (_forecast_board excludes started games); the
+    one-day tolerance here covers market dates that lag a post-midnight-UTC kickoff. Idempotent via
     dedup_key. candidates = [{match, team_a, team_b, commence_time, stage, dedup_key}]."""
     if not candidates:
         return 0
+    try:
+        floor = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    except ValueError:
+        floor = today
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     inserted = 0
     with _conn() as c:
         for r in candidates:
-            if not r.get("dedup_key") or (r.get("commence_time") or "")[:10] < today:
-                continue                     # forward-only guard
+            if not r.get("dedup_key") or (r.get("commence_time") or "")[:10] < floor:
+                continue                     # forward-only backstop (kickoff-aware filter is upstream)
             cur = c.execute(
                 """INSERT OR IGNORE INTO forecasts
                    (match, team_a, team_b, commence_time, stage, logged_at, dedup_key)
@@ -661,6 +668,12 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
     if not now_iso:
         return 0
     cutoff = now_iso[:10]                     # model trained on results through ~now; this game is future
+    try:
+        # a boardless pending row is only STALE once its market date is 2+ days gone: market dates lag
+        # post-midnight-UTC kickoffs by a day, so voiding at `cutoff` would kill tonight's late games
+        stale_before = (date.fromisoformat(cutoff) - timedelta(days=1)).isoformat()
+    except ValueError:
+        stale_before = cutoff
     locked = 0
     with _conn() as c:
         rows = c.execute(
@@ -669,7 +682,7 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
         for r in rows:
             b = board.get(r["dedup_key"])
             if not b:
-                if (r["commence_time"] or "9999")[:10] < cutoff:
+                if (r["commence_time"] or "9999")[:10] < stale_before:
                     c.execute("UPDATE forecasts SET status='void' WHERE id=?", (r["id"],))
                 continue
             if b.get("missed"):
