@@ -103,10 +103,10 @@ async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
     if not props and _free_cache["props"]:
         age_days = (time.time() - (_free_cache.get("props_fresh") or 0)) / 86400.0
         if age_days <= config.PROPS_MAX_STALE_DAYS:
-            print("[aggregator] props empty this pull — keeping last-good prop board")
+            print("[aggregator] props empty this pull, keeping last-good prop board")
             props = _free_cache["props"]
         else:
-            print(f"[aggregator] last-good props aged out ({age_days:.1f}d) — dropping the stale board")
+            print(f"[aggregator] last-good props aged out ({age_days:.1f}d), dropping the stale board")
             _free_cache["props"] = []
     elif props:
         _save_props_disk(props)
