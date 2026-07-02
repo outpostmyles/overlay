@@ -13,12 +13,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from .. import config
 
 _BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world"
+
+# cache key holding dates whose scoreboard is fully summarized (every game finished + cached), so the
+# 40-day results window doesn't re-hit ESPN for long-past dates on every refresh
+_DONE_KEY = "_done"
 
 
 def _load_results_cache() -> dict:
@@ -144,18 +149,42 @@ def _box_stats(summary: dict) -> dict:
 async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dict]:
     """Finished-game results for settling parlay legs: per game {date, goals{team_key:int},
     scorers:set(normalized names)}. Goals come from the final score; scorers from keyEvents
-    (own goals excluded — they don't count for an anytime-scorer). dates are 'YYYYMMDD'."""
+    (own goals excluded — they don't count for an anytime-scorer). dates are 'YYYYMMDD'.
+
+    Dates whose scoreboard is fully summarized get a done marker: their games are served straight from
+    the cache with no scoreboard request, so the 40-day results window costs a handful of calls per
+    refresh instead of 40."""
     from ..matching import normalize_team
     cache = _load_results_cache()
+    done: set = set(cache.get(_DONE_KEY) or [])
+    settle_cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y%m%d")
     new_cached = 0
+    new_done = 0
     out: list[dict] = []
     for d in sorted(set(dates)):
+        if d in done:                              # every game that day is finished + cached
+            iso = _iso(d)
+            for eid, c in cache.items():
+                if eid != _DONE_KEY and c.get("date") == iso:
+                    out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
+                                "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
+                                "box": c.get("box") or {}})
+            continue
         try:
             sb = (await client.get(f"{_BASE}/scoreboard", params={"dates": d}, timeout=15)).json()
         except Exception as exc:  # noqa: BLE001
             print(f"[espn] results scoreboard {d} failed: {exc}")
             continue
-        for ev in sb.get("events", []):
+        events = sb.get("events", [])
+        # a date at least 2 days past is terminal once every game is completed + summarized, INCLUDING a
+        # genuinely game-free date (empty events in a real scoreboard envelope, e.g. pre-tournament days)
+        if d < settle_cutoff and "events" in sb and all(
+                (((ev.get("status") or {}).get("type") or {}).get("completed"))
+                and str(ev.get("id") or "") in cache and "box" in cache.get(str(ev.get("id") or ""), {})
+                for ev in events):
+            done.add(d)
+            new_done += 1
+        for ev in events:
             if not (((ev.get("status") or {}).get("type") or {}).get("completed")):
                 continue
             eid = str(ev.get("id") or "")
@@ -210,9 +239,11 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
             out.append({"date": _iso(d), "goals": goals, "winner": winner,
                         "scorers": scorers, "played": played, "box": box})
-    if new_cached:
+    if new_cached or new_done:
+        cache[_DONE_KEY] = sorted(done)
         _save_results_cache(cache)
-        print(f"[espn] memoized {new_cached} finished game(s); {len(cache)} cached total")
+        if new_cached:
+            print(f"[espn] memoized {new_cached} finished game(s); {len(cache) - 1} cached total")
     return out
 
 

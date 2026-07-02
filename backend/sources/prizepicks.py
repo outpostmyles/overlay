@@ -12,12 +12,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from .. import config
 from ..matching import normalize_team
 
+# When PrizePicks rate-limits us (error envelope), sit out for a while instead of hammering a throttled
+# source every refresh: good citizenship, and it cuts pointless calls ~6x while blocked.
+_COOLDOWN_SECONDS = 1800
+_cooldown_until = 0.0
+
 
 async def fetch() -> list[dict]:
+    global _cooldown_until
+    if time.monotonic() < _cooldown_until:
+        return []                                 # throttled recently; skip this refresh quietly
     url = (f"{config.PRIZEPICKS_URL}?league_id={config.PRIZEPICKS_LEAGUE}"
            f"&per_page=1000&single_stat=true")
     cmd = [
@@ -34,12 +43,14 @@ async def fetch() -> list[dict]:
         data = json.loads(out.decode())
     except Exception as exc:  # noqa: BLE001
         print(f"[prizepicks] fetch failed: {exc}")
+        _cooldown_until = time.monotonic() + _COOLDOWN_SECONDS
         return []
 
     # rate-limited responses come back HTTP 200 with an error envelope (no "data") — treat as a miss
     # so the caller keeps the last-good board instead of blanking it.
     if not isinstance(data, dict) or "data" not in data or data.get("error"):
-        print(f"[prizepicks] error envelope / no data (throttled?) — {str(data)[:120]}")
+        print(f"[prizepicks] throttled — backing off {_COOLDOWN_SECONDS // 60} min ({str(data)[:80]})")
+        _cooldown_until = time.monotonic() + _COOLDOWN_SECONDS
         return []
 
     players = {
