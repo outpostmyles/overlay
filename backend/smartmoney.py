@@ -21,6 +21,7 @@ import httpx
 
 from . import config
 from .matching import normalize_team
+from .sports import active
 
 
 def _parse(val):
@@ -99,19 +100,20 @@ _slug_cache: dict[str, str] = {}   # "fav|opp" -> polymarket fifwc slug (stable 
 
 
 async def _game_event(client: httpx.AsyncClient, fav_team: str, opp_team: str) -> dict | None:
-    """Find the Polymarket per-game event (slug `fifwc-...`) for a matchup, with full markets. The
-    slug→event resolution is stable, so we cache it and skip the public-search call after the first
-    hit; only the /events fetch (fresh markets/prices) and holders/trades re-run each cycle."""
+    """Find the Polymarket per-game event (the adapter's game-slug prefix, e.g. `fifwc-...`) for a
+    matchup, with full markets. The slug→event resolution is stable, so we cache it and skip the
+    public-search call after the first hit; only the /events fetch and holders/trades re-run."""
     ckey = "|".join(sorted([fav_team, opp_team]))
     slug = _slug_cache.get(ckey)
     if not slug:
+        prefix = active().polymarket_game_slug_prefix
         try:
             r = await client.get(f"{config.POLYMARKET_GAMMA}/public-search",
                                  params={"q": f"{fav_team} {opp_team}", "limit_per_type": 20,
                                          "events_status": "active"},
                                  headers={"Accept": "application/json"}, timeout=20)
             slug = next((e.get("slug") for e in (r.json().get("events", []) if r.status_code == 200 else [])
-                         if (e.get("slug") or "").startswith("fifwc-")), None)
+                         if (e.get("slug") or "").startswith(prefix)), None)
         except Exception as exc:  # noqa: BLE001
             print(f"[smartmoney] search failed for {fav_team} v {opp_team}: {exc}")
             return None

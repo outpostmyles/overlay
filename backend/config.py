@@ -22,6 +22,12 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(ROOT / ".env")
 
+# --- Active sport ---------------------------------------------------------- #
+# Everything sport-specific (market discovery, ESPN league, outcome arity, capabilities) lives on a
+# SportAdapter in backend/sports/. SPORT picks the active one; wc26 is the founding default and the
+# golden-snapshot test holds its behavior identical to the pre-adapter code.
+SPORT = os.getenv("SPORT", "wc26").strip() or "wc26"
+
 # --- API endpoints (prediction markets are free / no auth for read-only data) ---
 POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 POLYMARKET_CLOB = "https://clob.polymarket.com"
@@ -34,7 +40,7 @@ ODDS_API = "https://api.the-odds-api.com/v4"
 # We request ONLY h2h moneyline in the us region = 1 credit per refresh, and fetch it
 # manually (never on the auto-refresh loop) so credits are never burned silently.
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "").strip()
-ODDS_API_SPORT = "soccer_fifa_world_cup"
+# the sport key lives on the SportAdapter (adapter.odds_api_sport), like every per-sport constant
 ODDS_API_REGIONS = "us"
 ODDS_MARKETS = "h2h"                 # moneyline only -> 1 credit/refresh
 ODDS_MIN_REFRESH_INTERVAL = 30       # h2h debounce: ignore manual re-fetch within 30s (1 credit)
@@ -51,7 +57,7 @@ CORNER_EDGE_MIN = 0.04               # min EV vs the de-vigged book line to surf
 # --- Engine defaults ---
 # --- PrizePicks (free, public projections API) ---
 PRIZEPICKS_URL = "https://api.prizepicks.com/projections"
-PRIZEPICKS_LEAGUE = 241                      # World Cup
+# the league id lives on the SportAdapter (adapter.prizepicks_league)
 PRIZEPICKS_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 

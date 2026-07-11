@@ -10,29 +10,16 @@ single call. We classify by slug (robust) and keep only the markets that align c
 from __future__ import annotations
 
 import json
-import re
 
 import httpx
 
 from .. import config
 from ..matching import normalize_team
 from ..models import Market, Quote, Selection
+from ..sports import active
 
-_GROUP_RE = re.compile(r"^world-cup-group-[a-l]-winner$")
-
-
-def _classify(slug: str) -> str | None:
-    if slug == "world-cup-winner":
-        return "winner_outright"
-    if _GROUP_RE.match(slug):
-        return "group_winner"
-    if slug.startswith("world-cup-nation-to-reach-round-of-16"):
-        return "advance_r16"
-    if slug.startswith("world-cup-nation-to-reach-quarterfinals"):
-        return "advance_qf"
-    if slug.startswith("world-cup-nation-to-reach-semifinals"):
-        return "advance_sf"
-    return None
+# which event slugs map to which market types lives on the sport adapter (polymarket_classify),
+# as does the search query that surfaces them; this module stays sport-agnostic plumbing
 
 
 def _num(v) -> float | None:
@@ -60,7 +47,7 @@ async def _enumerate_events(client: httpx.AsyncClient) -> list[dict]:
     try:
         resp = await client.get(
             f"{config.POLYMARKET_GAMMA}/public-search",
-            params={"q": "world cup", "limit_per_type": 100, "events_status": "active"},
+            params={"q": active().polymarket_search_q, "limit_per_type": 100, "events_status": "active"},
             headers={"Accept": "application/json"},
             timeout=25,
         )
@@ -70,12 +57,14 @@ async def _enumerate_events(client: httpx.AsyncClient) -> list[dict]:
                 events[e["slug"]] = e
     except Exception as exc:  # noqa: BLE001
         print(f"[polymarket] search failed: {exc}")
-    # guarantee the winner market even if search relevance drops it
-    if "world-cup-winner" not in events:
+    # guarantee the adapter's pinned events (e.g. the outright winner) even if search drops them
+    for pinned in active().polymarket_pinned_slugs:
+        if pinned in events:
+            continue
         try:
             resp = await client.get(
                 f"{config.POLYMARKET_GAMMA}/events",
-                params={"slug": "world-cup-winner"},
+                params={"slug": pinned},
                 headers={"Accept": "application/json"},
                 timeout=25,
             )
@@ -84,14 +73,14 @@ async def _enumerate_events(client: httpx.AsyncClient) -> list[dict]:
                 if e.get("slug"):
                     events[e["slug"]] = e
         except Exception as exc:  # noqa: BLE001
-            print(f"[polymarket] winner fetch failed: {exc}")
+            print(f"[polymarket] pinned fetch failed: {exc}")
     return list(events.values())
 
 
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
     for ev in await _enumerate_events(client):
-        mtype = _classify(ev.get("slug", ""))
+        mtype = active().polymarket_classify(ev.get("slug", ""))
         if not mtype:
             continue
         slug = ev.get("slug", "")

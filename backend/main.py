@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import aggregator, config, futures_read, propread
+from . import aggregator, config, futures_read, propread, sports
 from .store import leans, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
@@ -20,6 +20,9 @@ _heartbeat_task: asyncio.Task | None = None
 
 @app.on_event("startup")
 def _startup() -> None:
+    # fail fast on a bad SPORT before anything fetches or writes with the wrong adapter
+    adapter = sports.active()
+    print(f"[sports] active adapter: {adapter.key} ({adapter.display_name})")
     paper.init_paper()
 
 

@@ -16,6 +16,7 @@ import time
 
 from .. import config
 from ..matching import normalize_team
+from ..sports import active
 
 # When PrizePicks rate-limits us (error envelope), sit out for a while instead of hammering a throttled
 # source every refresh: good citizenship, and it cuts pointless calls ~6x while blocked.
@@ -27,7 +28,7 @@ async def fetch() -> list[dict]:
     global _cooldown_until
     if time.monotonic() < _cooldown_until:
         return []                                 # throttled recently; skip this refresh quietly
-    url = (f"{config.PRIZEPICKS_URL}?league_id={config.PRIZEPICKS_LEAGUE}"
+    url = (f"{config.PRIZEPICKS_URL}?league_id={active().prizepicks_league}"
            f"&per_page=1000&single_stat=true")
     cmd = [
         "curl", "-s", "--max-time", "25",

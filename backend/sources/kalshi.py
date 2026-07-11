@@ -13,19 +13,21 @@ import httpx
 from .. import config
 from ..matching import kalshi_ticker_date, normalize_team
 from ..models import Market, Quote, Selection
+from ..sports import active
 
-# knockout games are listed as regulation-time markets ("Reg Time: Germany"); strip the wrapper from
-# the display label so cards read "Germany", not "Reg Time: Germany"
+# soccer knockout games are listed as regulation-time markets ("Reg Time: Germany"); strip the
+# wrapper from display labels (adapter-gated) so cards read "Germany", not "Reg Time: Germany"
 _REG_TIME = re.compile(r"\breg(?:ular|ulation)?\.?\s*time\b\s*:?\s*", re.IGNORECASE)
 
-# series_ticker -> (market_type, group)
-# v1 covers the cleanly-comparable markets: 3-way moneyline + tournament winner.
-# Totals/spreads are nested (over 5.5 / over 6.5 …) so they aren't a mutually-exclusive set —
-# de-vigging across them is invalid. They'll return in Phase 2 with per-line handling.
-_SERIES = {
-    "KXWCGAME": ("moneyline", "Matches"),
-    "KXMENWORLDCUP": ("winner_outright", "Futures"),
-}
+
+def _clean(text: str) -> str:
+    """Sport-aware label cleanup. The series registry itself lives on the adapter: v1 covers the
+    cleanly-comparable markets (game moneyline + outright). Totals/spreads are nested per line so
+    they aren't a mutually-exclusive set; de-vigging across them is invalid (Phase 2, per-line)."""
+    text = text or ""
+    if active().kalshi_strip_reg_time:
+        text = _REG_TIME.sub("", text)
+    return text
 
 
 def _prob(dollars) -> float | None:
@@ -65,7 +67,7 @@ async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "o
 
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
-    for series, (mtype, group) in _SERIES.items():
+    for series, (mtype, group) in active().kalshi_series.items():
         raw = await _fetch_series(client, series)
         # group the per-outcome markets by their parent event
         events: dict[str, list[dict]] = {}
@@ -77,8 +79,8 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
             selections: list[Selection] = []
             title = ""
             for m in children:
-                label = _REG_TIME.sub("", m.get("yes_sub_title") or m.get("title") or "").strip()
-                title = _REG_TIME.sub("", (m.get("title") or title)).replace(" Winner?", "").strip()
+                label = _clean(m.get("yes_sub_title") or m.get("title") or "").strip()
+                title = _clean(m.get("title") or title).replace(" Winner?", "").strip()
                 ask = _prob(m.get("yes_ask_dollars"))
                 bid = _prob(m.get("yes_bid_dollars"))
                 last = _prob(m.get("last_price_dollars"))
@@ -108,7 +110,7 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
                 )
             if len(selections) < 2:
                 continue
-            event_name = title if mtype != "winner_outright" else "World Cup Winner"
+            event_name = title if mtype != "winner_outright" else (active().kalshi_outright_event or title)
             markets.append(
                 Market(
                     market_id=f"kalshi:{ev_ticker}",
@@ -123,7 +125,8 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
 
 
 async def fetch_resolved(client: httpx.AsyncClient) -> list[dict]:
-    """Settled per-match (KXWCGAME) outcomes, for free auto-grading of favorite-ML paper picks.
+    """Settled per-game outcomes (the adapter's resolved series), for free auto-grading of
+    favorite-ML paper picks.
 
     Each child market is a Yes/No on one outcome (team-to-win or Tie); a settled market's
     `result` is "yes"/"no". Returns one row per team outcome:
@@ -132,7 +135,7 @@ async def fetch_resolved(client: httpx.AsyncClient) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for status in ("settled", "closed"):  # Kalshi rejects status=finalized with a 400
-        for m in await _fetch_series(client, "KXWCGAME", status=status):
+        for m in await _fetch_series(client, active().kalshi_resolved_series, status=status):
             tkr = m.get("ticker") or ""
             if tkr in seen:
                 continue

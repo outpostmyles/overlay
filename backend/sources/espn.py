@@ -18,8 +18,12 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .. import config
+from ..sports import active
 
-_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world"
+
+def _base() -> str:
+    """ESPN's hidden site API shares one URL shape across sports; the league path is the adapter's."""
+    return f"https://site.api.espn.com/apis/site/v2/sports/{active().espn_path}"
 
 # cache key holding dates whose scoreboard is fully summarized (every game finished + cached), so the
 # 40-day results window doesn't re-hit ESPN for long-past dates on every refresh
@@ -49,7 +53,7 @@ async def _scoreboard_events(client: httpx.AsyncClient, yyyymmdd: str) -> dict:
     """{frozenset(team_key, team_key): event_id} for one date."""
     from ..matching import normalize_team
     try:
-        r = await client.get(f"{_BASE}/scoreboard", params={"dates": yyyymmdd}, timeout=15)
+        r = await client.get(f"{_base()}/scoreboard", params={"dates": yyyymmdd}, timeout=15)
         events = r.json().get("events", []) if r.status_code == 200 else []
     except Exception as exc:  # noqa: BLE001
         print(f"[espn] scoreboard {yyyymmdd} failed: {exc}")
@@ -74,7 +78,7 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
     out: dict = {}
     for d in sorted(set(dates)):
         try:
-            r = await client.get(f"{_BASE}/scoreboard", params={"dates": d}, timeout=15)
+            r = await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)
             events = r.json().get("events", []) if r.status_code == 200 else []
         except Exception as exc:  # noqa: BLE001
             print(f"[espn] kickoff scoreboard {d} failed: {exc}")
@@ -94,7 +98,7 @@ async def _summary_xi(client: httpx.AsyncClient, event_id: str) -> dict:
     """{team_key: {formation, xi:[names]}} — only teams whose official XI has actually posted."""
     from ..matching import normalize_team
     try:
-        r = await client.get(f"{_BASE}/summary", params={"event": event_id}, timeout=15)
+        r = await client.get(f"{_base()}/summary", params={"event": event_id}, timeout=15)
         data = r.json() if r.status_code == 200 else {}
     except Exception as exc:  # noqa: BLE001
         print(f"[espn] summary {event_id} failed: {exc}")
@@ -171,7 +175,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                                 "box": c.get("box") or {}})
             continue
         try:
-            sb = (await client.get(f"{_BASE}/scoreboard", params={"dates": d}, timeout=15)).json()
+            sb = (await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)).json()
         except Exception as exc:  # noqa: BLE001
             print(f"[espn] results scoreboard {d} failed: {exc}")
             continue
@@ -214,7 +218,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             played: set = set()
             box: dict = {}
             try:
-                s = (await client.get(f"{_BASE}/summary", params={"event": ev["id"]}, timeout=15)).json()
+                s = (await client.get(f"{_base()}/summary", params={"event": ev["id"]}, timeout=15)).json()
                 for ke in (s.get("keyEvents") or []):
                     if not ke.get("scoringPlay") or ke.get("shootout"):
                         continue

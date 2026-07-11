@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .. import config
 from ..matching import normalize_team
+from ..sports import active as _active_sport
 
 _VS_RE = re.compile(r"\s+vs\.?\s+", re.IGNORECASE)
 
@@ -47,7 +48,8 @@ CREATE TABLE IF NOT EXISTS paper_picks (
     real_money INTEGER DEFAULT 0, -- 1 if the user actually placed this bet (absorbs the Bet Log)
     stake_units REAL DEFAULT 1.0, -- conviction-scaled units risked (for the bankroll curve)
     legs_json TEXT,               -- structured legs for a parlay entry (for settlement)
-    game_over_at TEXT             -- stamped when the pick's game has a result (still pending = needs grading)
+    game_over_at TEXT,            -- stamped when the pick's game has a result (still pending = needs grading)
+    sport TEXT                    -- multi-sport namespace; NULL on legacy rows means wc26
 );
 """
 
@@ -56,7 +58,8 @@ _MIGRATE = [("odds_type", "TEXT"), ("popularity", "INTEGER"),
             ("on_favorite", "INTEGER"), ("agreement_pp", "REAL"),
             ("closing_locked_at", "TEXT"), ("real_money", "INTEGER"),
             ("stake_units", "REAL"), ("legs_json", "TEXT"), ("game_over_at", "TEXT"),
-            ("model_prob", "REAL")]
+            ("model_prob", "REAL"),
+            ("sport", "TEXT")]   # multi-sport namespace; NULL on legacy rows means wc26
 
 
 # --- Model Ledger: pre-kickoff 1X2 forecasts, model vs market, graded on the result ----------- #
@@ -87,7 +90,8 @@ CREATE TABLE IF NOT EXISTS forecasts (
     hit_model INTEGER,               -- model argmax == outcome
     legs_json TEXT,                  -- extra market predictions (total/team goals, BTTS, corners), frozen + graded
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | locked | settled | void
-    dedup_key TEXT UNIQUE
+    dedup_key TEXT UNIQUE,
+    sport TEXT                       -- multi-sport namespace; NULL on legacy rows means wc26
 );
 """
 
@@ -100,18 +104,22 @@ def _conn() -> sqlite3.Connection:
 
 def init_paper() -> None:
     Path(config.DB_PATH).touch(exist_ok=True)
+    def _alter(c, stmt: str) -> None:
+        """Additive migration: a duplicate column is expected (already migrated); anything else
+        (locked db, disk error) must crash startup LOUDLY, not surface later as per-request 502s."""
+        try:
+            c.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
     with _conn() as c:
         c.executescript(_SCHEMA)
         c.executescript(_FORECAST_SCHEMA)
         for col, typ in _MIGRATE:
-            try:
-                c.execute(f"ALTER TABLE paper_picks ADD COLUMN {col} {typ}")
-            except sqlite3.OperationalError:
-                pass  # column already exists
-        try:
-            c.execute("ALTER TABLE forecasts ADD COLUMN legs_json TEXT")
-        except sqlite3.OperationalError:
-            pass  # forecasts table predates the prediction-sheet legs
+            _alter(c, f"ALTER TABLE paper_picks ADD COLUMN {col} {typ}")
+        _alter(c, "ALTER TABLE forecasts ADD COLUMN legs_json TEXT")
+        _alter(c, "ALTER TABLE forecasts ADD COLUMN sport TEXT")
 
 
 def log_picks(rows: list[dict]) -> int:
@@ -119,20 +127,21 @@ def log_picks(rows: list[dict]) -> int:
     if not rows:
         return 0
     inserted = 0
+    sport = _active_sport().key
     with _conn() as c:
         for r in rows:
             cur = c.execute(
                 """INSERT OR IGNORE INTO paper_picks
                    (logged_at, match, archetype, selection, confidence, commence_time,
                     pick_fair_prob, pick_price_decimal, model_prob, dedup_key,
-                    odds_type, popularity, on_favorite, agreement_pp, stake_units, legs_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    odds_type, popularity, on_favorite, agreement_pp, stake_units, legs_json, sport)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (r.get("logged_at") or time.strftime("%Y-%m-%d %H:%M:%S"),
                  r["match"], r["archetype"], r["selection"], r.get("confidence"),
                  r.get("commence_time"), r.get("pick_fair_prob"), r.get("pick_price_decimal"),
                  r.get("model_prob"), r["dedup_key"], r.get("odds_type"), r.get("popularity"),
                  r.get("on_favorite"), r.get("agreement_pp"), r.get("stake_units") or 1.0,
-                 r.get("legs_json")),
+                 r.get("legs_json"), sport),
             )
             inserted += cur.rowcount
     return inserted
@@ -644,16 +653,17 @@ def log_forecasts(candidates: list[dict], today: str) -> int:
         floor = today
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     inserted = 0
+    sport = _active_sport().key
     with _conn() as c:
         for r in candidates:
             if not r.get("dedup_key") or (r.get("commence_time") or "")[:10] < floor:
                 continue                     # forward-only backstop (kickoff-aware filter is upstream)
             cur = c.execute(
                 """INSERT OR IGNORE INTO forecasts
-                   (match, team_a, team_b, commence_time, stage, logged_at, dedup_key)
-                   VALUES (?,?,?,?,?,?,?)""",
+                   (match, team_a, team_b, commence_time, stage, logged_at, dedup_key, sport)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 (r["match"], r["team_a"], r["team_b"], r.get("commence_time"),
-                 r.get("stage"), now, r["dedup_key"]),
+                 r.get("stage"), now, r["dedup_key"], sport),
             )
             inserted += cur.rowcount
     return inserted

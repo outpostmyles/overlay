@@ -15,6 +15,7 @@ import httpx
 from .. import config
 from ..matching import iso_date, normalize_team
 from ..models import Market, Quote, Selection
+from ..sports import active
 
 
 def _decimal(price) -> float | None:
@@ -31,7 +32,7 @@ async def fetch(client: httpx.AsyncClient) -> dict:
         return {"markets": [], "credits_remaining": None, "ok": False, "error": "no key"}
     try:
         resp = await client.get(
-            f"{config.ODDS_API}/sports/{config.ODDS_API_SPORT}/odds",
+            f"{config.ODDS_API}/sports/{active().odds_api_sport}/odds",
             params={
                 "apiKey": config.ODDS_API_KEY,
                 "regions": config.ODDS_API_REGIONS,
@@ -69,7 +70,7 @@ async def fetch_corners(client: httpx.AsyncClient, targets=None, max_games: int 
     credits_remaining); the chosen line is the most balanced (most "main") point offered, de-vigged."""
     if not config.ODDS_API_KEY:
         return {}, None
-    base, sport, key = config.ODDS_API, config.ODDS_API_SPORT, config.ODDS_API_KEY
+    base, sport, key = config.ODDS_API, active().odds_api_sport, config.ODDS_API_KEY
     target_sets = set(targets) if targets is not None else None
     out: dict = {}
     credits = None
