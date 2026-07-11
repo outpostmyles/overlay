@@ -38,6 +38,7 @@ DRAW_KEYS = {"draw", "tie", "the draw"}
 def normalize_team(name: str | None) -> str:
     if not name:
         return ""
+    from .sports import active   # late import: sports never imports matching, but callers vary
     s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     s = s.lower().strip()
     s = s.replace("-", " ").replace("&", " and ")   # "Bosnia-Herzegovina"/"X & Y" → spaced
@@ -49,19 +50,25 @@ def normalize_team(name: str | None) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     if s in DRAW_KEYS:
         return "draw"
-    return ALIASES.get(s, s)
+    # the active sport's aliases win (e.g. Kalshi's "Los Angeles D" -> "los angeles dodgers"),
+    # then the global soccer map; wc26 carries no adapter aliases so its behavior is unchanged
+    sport_alias = active().aliases.get(s)
+    return sport_alias or ALIASES.get(s, s)
 
 
 def kalshi_ticker_date(event_ticker: str) -> str | None:
-    """'KXWCGAME-26JUN27CODUZB' -> '2026-06-27'."""
-    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})", event_ticker or "")
+    """'KXWCGAME-26JUN27CODUZB' -> '2026-06-27'. Series whose tickers embed a start time
+    ('KXMLBGAME-26JUL121610TORSD') come back time-qualified, '2026-07-12T16:10': the HHMM is the
+    per-game discriminator that keeps a doubleheader from merging into one market."""
+    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})?", event_ticker or "")
     if not m:
         return None
-    yy, mon, dd = m.groups()
+    yy, mon, dd, hhmm = m.groups()
     mm = _MONTHS.get(mon)
     if not mm:
         return None
-    return f"20{yy}-{mm}-{dd}"
+    date = f"20{yy}-{mm}-{dd}"
+    return f"{date}T{hhmm[:2]}:{hhmm[2:]}" if hhmm else date
 
 
 def iso_date(commence_time: str | None) -> str | None:
@@ -70,10 +77,16 @@ def iso_date(commence_time: str | None) -> str | None:
     return commence_time[:10]
 
 
-def moneyline_key(date: str | None, team_keys: list[str]) -> str:
-    # Key on the team PAIR only, not the date: Kalshi derives its date from the UTC ticker while The
-    # Odds API uses US-local (often a day later), so keying on date splits the same game into two
-    # unmerged markets (killing line-shopping + leaving the fair line undefined). A pair plays at most
-    # once within the active slate, so the pair alone is a safe merge key.
+def moneyline_key(commence: str | None, team_keys: list[str]) -> str:
+    """Merge key for the same game across sources.
+
+    wc26 keys on the team PAIR only: Kalshi derives its date from the UTC ticker while The Odds API
+    uses US-local (often a day later), so keying on date would split one game into two unmerged
+    markets, and a WC pair plays at most once within the slate. Daily sports (MLB) key on pair +
+    date + start time instead: the same pair plays a 3-4 game series and doubleheaders share even
+    the date, so pair-only would silently merge distinct games and corrupt de-vig/CLV/settlement."""
+    from .sports import active
     teams = sorted(t for t in team_keys if t and t != "draw")
-    return f"ml:{'|'.join(teams)}"
+    if active().pair_only_key:
+        return f"ml:{'|'.join(teams)}"
+    return f"ml:{'|'.join(teams)}|{(commence or '')[:16]}"

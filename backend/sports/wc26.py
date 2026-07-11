@@ -46,4 +46,7 @@ WC26 = register(SportAdapter(
     odds_api_sport="soccer_fifa_world_cup",
     prizepicks_league=241,
     capabilities=frozenset({"model", "futures", "bracket", "corners", "lineups", "smartmoney"}),
+    aliases={},                    # the global soccer map in matching.py already covers the WC
+    results_window_days=40,        # the whole tournament (futures field reconstruction needs it)
+    pair_only_key=True,            # a WC pair plays at most once in the slate; dates skew UTC/US-local
 ))

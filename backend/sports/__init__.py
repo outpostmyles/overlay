@@ -32,6 +32,9 @@ class SportAdapter:
     odds_api_sport: str                   # The Odds API sport key (manual-only feed)
     prizepicks_league: int                # PrizePicks league id for props
     capabilities: frozenset               # {"model","futures","bracket","corners","lineups","smartmoney"}
+    aliases: dict                         # sport-specific name aliases, consulted before the global map
+    results_window_days: int              # how far back the ESPN results sweep looks (tiny for daily sports)
+    pair_only_key: bool                   # merge moneylines on the team pair alone (WC) vs pair+date+time (MLB)
 
 
 _REGISTRY: dict[str, SportAdapter] = {}
@@ -61,3 +64,4 @@ def active() -> SportAdapter:
 
 
 from . import wc26  # noqa: E402,F401  (import registers the adapter)
+from . import mlb   # noqa: E402,F401

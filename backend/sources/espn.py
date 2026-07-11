@@ -30,10 +30,19 @@ def _base() -> str:
 _DONE_KEY = "_done"
 
 
+def _cache_path():
+    """Per-sport results cache: MLB games land on the same DATES as WC games, so a shared file's
+    done-date markers would wrongly skip the other sport's scoreboard. wc26 keeps the legacy name."""
+    a = active()
+    if a.key == "wc26":
+        return config.ESPN_CACHE_PATH
+    return config.ESPN_CACHE_PATH.with_name(f"poly_espn_cache_{a.key}.json")
+
+
 def _load_results_cache() -> dict:
     """{event_id: {date, goals, scorers:[...], played:[...]}} — FINISHED games are terminal, so once
     summarized we never re-fetch a game's /summary. Persisted so restarts don't re-summarize either."""
-    p = config.ESPN_CACHE_PATH
+    p = _cache_path()
     if p.exists():
         try:
             return json.loads(p.read_text())
@@ -44,7 +53,7 @@ def _load_results_cache() -> dict:
 
 def _save_results_cache(c: dict) -> None:
     try:
-        config.ESPN_CACHE_PATH.write_text(json.dumps(c))
+        _cache_path().write_text(json.dumps(c))
     except Exception as exc:  # noqa: BLE001
         print(f"[espn] results cache save failed: {exc}")
 
@@ -88,7 +97,10 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
                 comps = ev["competitions"][0]["competitors"]
                 keys = frozenset(normalize_team(c["team"]["displayName"]) for c in comps)
                 if ev.get("date") and len(keys) >= 2:
-                    out[keys] = ev["date"]           # full ISO, e.g. 2026-06-21T16:00Z
+                    out[keys] = ev["date"]           # pair-keyed (WC: a pair plays once in the slate)
+                    # date-qualified key for daily sports: a series repeats the same pair across days,
+                    # so the pair alone would smear one game's start time over the whole series
+                    out[(keys, _iso(d))] = ev["date"]
             except (KeyError, IndexError, TypeError):
                 continue
     return out
@@ -172,7 +184,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 if eid != _DONE_KEY and c.get("date") == iso:
                     out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                                 "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                                "box": c.get("box") or {}})
+                                "box": c.get("box") or {}, "iso": c.get("iso")})
             continue
         try:
             sb = (await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)).json()
@@ -196,7 +208,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 c = cache[eid]                          # (entries cached before box existed fall through to backfill)
                 out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                             "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                            "box": c.get("box") or {}})
+                            "box": c.get("box") or {}, "iso": c.get("iso")})
                 continue
             try:
                 comp = ev["competitions"][0]["competitors"]
@@ -237,12 +249,13 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                                 played.add(normalize_team(nm))
                 box = _box_stats(s)
                 cache[eid] = {"date": _iso(d), "goals": goals, "winner": winner,
-                              "scorers": sorted(scorers), "played": sorted(played), "box": box}
+                              "scorers": sorted(scorers), "played": sorted(played), "box": box,
+                              "iso": ev.get("date")}    # scheduled start: the doubleheader disambiguator
                 new_cached += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
             out.append({"date": _iso(d), "goals": goals, "winner": winner,
-                        "scorers": scorers, "played": played, "box": box})
+                        "scorers": scorers, "played": played, "box": box, "iso": ev.get("date")})
     if new_cached or new_done:
         cache[_DONE_KEY] = sorted(done)
         _save_results_cache(cache)

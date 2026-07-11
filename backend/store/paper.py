@@ -161,7 +161,7 @@ def settle_from_resolved(resolved: list[dict]) -> int:
     if not resolved:
         return 0
     lookup = {(r["date"], r["team_key"]): r["result"]
-              for r in resolved if r.get("date") and r.get("result") in ("won", "lost")}
+              for r in resolved if r.get("date") and r.get("result") in ("won", "lost", "void")}
     if not lookup:
         return 0
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -537,8 +537,9 @@ def _pnl(r: sqlite3.Row) -> float | None:
 
 
 def list_picks() -> list[dict]:
+    clause, params = _sport_clause()               # each sport sees only its own Track Record
     with _conn() as c:
-        rows = c.execute("SELECT * FROM paper_picks ORDER BY id DESC").fetchall()
+        rows = c.execute(f"SELECT * FROM paper_picks WHERE {clause} ORDER BY id DESC", params).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -589,10 +590,11 @@ def model_calibration() -> dict:
     picks that logged a model_prob. Brier = mean (pred - outcome)^2 (lower is better, 0.25 = a coin
     flip). Comparing mean_pred to hit_rate exposes over-projection (mean_pred >> hit_rate) or under.
     Only populated for picks logged after model_prob shipped, so it fills going forward."""
+    clause, params = _sport_clause()
     with _conn() as c:
         rows = c.execute(
             "SELECT archetype, model_prob, status FROM paper_picks "
-            "WHERE model_prob IS NOT NULL AND status IN ('won','lost')"
+            f"WHERE model_prob IS NOT NULL AND status IN ('won','lost') AND {clause}", params
         ).fetchall()
     agg: dict = {}
     for r in rows:
@@ -686,6 +688,17 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
         stale_before = cutoff
     locked = 0
     with _conn() as c:
+        # a LOCKED game whose final never arrived (postponed after the lock) can no longer grade once
+        # its date falls outside the results window; void it so a future makeup or series game can
+        # never masquerade as its result. wc26 games always complete well inside their 40-day window.
+        clause, sparams = _sport_clause()
+        window = _active_sport().results_window_days
+        try:
+            no_final_by = (date.fromisoformat(cutoff) - timedelta(days=max(window - 1, 2))).isoformat()
+            c.execute(f"UPDATE forecasts SET status='void' WHERE status='locked' "
+                      f"AND commence_time < ? AND {clause}", (no_final_by, *sparams))
+        except ValueError:
+            pass
         rows = c.execute(
             "SELECT id, dedup_key, commence_time FROM forecasts WHERE status='pending'"
         ).fetchall()
@@ -700,7 +713,8 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
                 continue
             if not b.get("lock_now"):
                 continue
-            m, k = b["model"], b["market"]
+            m = b.get("model") or (None, None, None)   # anchor-only sports lock the market line alone
+            k = b["market"]
             cur = c.execute(
                 """UPDATE forecasts SET status='locked', lock_ts=?, kickoff_iso=?, model_cutoff=?,
                    model_a=?, model_draw=?, model_b=?, market_a=?, market_draw=?, market_b=?,
@@ -773,7 +787,7 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
     for g in results:
         ks = list((g.get("goals") or {}).keys())
         if len(ks) == 2:
-            idx[frozenset(ks)] = g           # knockout pairs are unique, so a team-pair key is enough
+            idx.setdefault(frozenset(ks), []).append(g)
     if not idx:
         return 0
     corners_idx = _corners_total_index(team_stats)
@@ -781,15 +795,32 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
     with _conn() as c:
         rows = c.execute(
             "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
-            "AND model_a IS NOT NULL AND market_a IS NOT NULL"
+            "AND market_a IS NOT NULL"
         ).fetchall()
         for r in rows:
-            g = idx.get(frozenset((r["team_a"], r["team_b"])))
+            # A knockout pair plays once, so pair-only matching is exact for wc26 (its Kalshi market
+            # date can lag the ESPN result date, so a date check would regress late kickoffs there).
+            # Daily sports replay the same pair across a series and a POSTPONED game's pair will
+            # complete a different game later, so they may only grade against a same-date (or exact
+            # scheduled-start) final; anything else stays unsettled rather than guessing.
+            cands = idx.get(frozenset((r["team_a"], r["team_b"]))) or []
+            pair_exact = _active_sport().pair_only_key
+            if pair_exact and len(cands) == 1:
+                g = cands[0]
+            else:
+                same_date = [x for x in cands if x.get("date") == (r["commence_time"] or "")[:10]]
+                pool = same_date if not pair_exact else (same_date or cands)
+                g = next((x for x in pool if x.get("iso") and r["kickoff_iso"]
+                          and x["iso"] == r["kickoff_iso"]), None)
+                if g is None and len(pool) == 1:
+                    g = pool[0]
             if not g:
                 continue
             ga, gb = g["goals"].get(r["team_a"]), g["goals"].get(r["team_b"])
             if ga is None or gb is None:
                 continue
+            if ga == gb and not (r["market_draw"] or 0):
+                continue   # a level score in a 2-way sport is a suspended oddity, never a gradeable draw
             try:
                 legs = json.loads(r["legs_json"]) if r["legs_json"] else []
             except (TypeError, ValueError):
@@ -800,15 +831,19 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
                 outcome = "a" if ga > gb else "b" if gb > ga else "draw"
                 oi = _OUTCOME_IDX[outcome]
                 pens = 1 if (outcome == "draw" and g.get("winner")) else 0
-                mp = (r["model_a"], r["model_draw"], r["model_b"])
                 kp = (r["market_a"], r["market_draw"], r["market_b"])
-                hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
+                if r["model_a"] is not None:      # model column rides only where a model exists
+                    mp = (r["model_a"], r["model_draw"], r["model_b"])
+                    bm, rm = _brier3(mp, oi), _rps3(mp, oi)
+                    hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
+                else:
+                    bm = rm = hit = None
                 c.execute(
                     """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
                        pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?,
                        legs_json=? WHERE id=? AND status='locked'""",
-                    (ga, gb, outcome, pens, _brier3(mp, oi), _brier3(kp, oi),
-                     _rps3(mp, oi), _rps3(kp, oi), hit, json.dumps(graded), r["id"]),
+                    (ga, gb, outcome, pens, bm, _brier3(kp, oi),
+                     rm, _rps3(kp, oi), hit, json.dumps(graded), r["id"]),
                 )
                 settled += 1
             elif graded != legs:                 # already settled: only rewrite if a leg newly graded
@@ -816,12 +851,19 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
     return settled
 
 
+def _sport_clause(alias: str = "") -> tuple[str, tuple]:
+    """SQL filter scoping ledger reads to the active sport; legacy NULL rows belong to wc26."""
+    key = _active_sport().key
+    return f"({alias}sport = ? OR (? = 'wc26' AND {alias}sport IS NULL))", (key, key)
+
+
 def list_forecasts() -> list[dict]:
-    """Locked (awaiting result) + settled forecasts, soonest-undecided and most-recent first."""
+    """Locked (awaiting result) + settled forecasts for the ACTIVE sport, soonest-undecided first."""
+    clause, params = _sport_clause()
     with _conn() as c:
         rows = c.execute(
-            "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
-            "ORDER BY status='locked' DESC, commence_time DESC, id DESC"
+            f"SELECT * FROM forecasts WHERE status IN ('locked','settled') AND {clause} "
+            "ORDER BY status='locked' DESC, commence_time DESC, id DESC", params
         ).fetchall()
     out = []
     for r in rows:
@@ -835,29 +877,48 @@ def list_forecasts() -> list[dict]:
 
 
 def forecast_calibration() -> dict:
-    """Paired model-vs-market scorecard over SETTLED forecasts. Gated: aggregates are withheld until
-    FORECAST_MIN_N settle (knockout samples are tiny), and even then it stays exploratory (wide CIs, do
-    NOT retrain on it). skill_vs_market > 0 means the model's Brier beat the de-vigged market's."""
+    """Scorecard over the ACTIVE sport's SETTLED forecasts. Where a model exists (wc26) it is the
+    paired model-vs-market comparison; anchor-only sports get the market's own calibration (Brier +
+    favorite hit rate). Gated: aggregates are withheld until FORECAST_MIN_N settle, and even then it
+    stays exploratory (wide CIs, do NOT retrain on it)."""
     min_n = getattr(config, "FORECAST_MIN_N", 8)
+    clause, params = _sport_clause()
     with _conn() as c:
-        rows = c.execute(
+        mrows = c.execute(
             "SELECT brier_model, brier_market, rps_model, rps_market, hit_model "
-            "FROM forecasts WHERE status='settled' AND brier_model IS NOT NULL"
+            f"FROM forecasts WHERE status='settled' AND brier_model IS NOT NULL AND {clause}", params
         ).fetchall()
-        locked = c.execute("SELECT COUNT(*) FROM forecasts WHERE status='locked'").fetchone()[0]
-    n = len(rows)
+        krows = c.execute(
+            "SELECT market_a, market_draw, market_b, actual_outcome, brier_market "
+            f"FROM forecasts WHERE status='settled' AND brier_market IS NOT NULL AND {clause}", params
+        ).fetchall()
+        locked = c.execute(
+            f"SELECT COUNT(*) FROM forecasts WHERE status='locked' AND {clause}", params
+        ).fetchone()[0]
+    n = len(mrows)
     out = {"n": n, "min_n": min_n, "ready": n >= min_n, "locked_pending": locked}
+    # the market's own record (always available; for anchor-only sports it IS the ledger)
+    kn = len(krows)
+    out["market_n"] = kn
+    if kn >= min_n:
+        fav_hits = 0
+        for r in krows:
+            kp = (r["market_a"], r["market_draw"] or 0.0, r["market_b"])
+            fav = max(range(3), key=lambda i: kp[i])
+            fav_hits += 1 if fav == _OUTCOME_IDX.get(r["actual_outcome"], -1) else 0
+        out["market_brier"] = round(sum(r["brier_market"] for r in krows) / kn, 3)
+        out["market_hit_rate"] = round(fav_hits / kn * 100, 1)
     if n < min_n:
-        return out                            # gate: withhold every aggregate until the sample is big enough
-    bm = sum(r["brier_model"] for r in rows) / n
-    bk = sum(r["brier_market"] for r in rows) / n
+        return out                            # gate: withhold the model aggregate until the sample is real
+    bm = sum(r["brier_model"] for r in mrows) / n
+    bk = sum(r["brier_market"] for r in mrows) / n
     out.update({
         "brier_model": round(bm, 3), "brier_market": round(bk, 3),
-        "rps_model": round(sum(r["rps_model"] for r in rows) / n, 3),
-        "rps_market": round(sum(r["rps_market"] for r in rows) / n, 3),
-        "hit_rate": round(sum(r["hit_model"] for r in rows) / n * 100, 1),
+        "rps_model": round(sum(r["rps_model"] for r in mrows) / n, 3),
+        "rps_market": round(sum(r["rps_market"] for r in mrows) / n, 3),
+        "hit_rate": round(sum(r["hit_model"] for r in mrows) / n * 100, 1),
         "skill_vs_market": round((1 - bm / bk) * 100, 1) if bk else None,  # +ve = model beats the market
-        "beat_market": sum(1 for r in rows if r["brier_model"] < r["brier_market"]),
+        "beat_market": sum(1 for r in mrows if r["brier_model"] < r["brier_market"]),
     })
     return out
 

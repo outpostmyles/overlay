@@ -69,6 +69,12 @@ function renderAll() {
     fill.style.width = (left != null ? Math.max(2, Math.min(100, (left / 500) * 100)) : 0) + "%";
     btn.disabled = false;
   }
+  // capability-gated tabs: anchor-only sports (MLB) have no futures bracket to show
+  const caps = (s.meta && s.meta.capabilities) || null;
+  if (caps) {
+    const fut = document.querySelector('[data-tab="futures"]');
+    if (fut) fut.style.display = caps.includes("futures") ? "" : "none";
+  }
   renderPicks();
   renderLedger();
   renderResearch();
@@ -159,14 +165,19 @@ function _predRows(legs, graded) {
   if (!legs || !legs.length) return "";
   return `<div class="preds">${_predRowsInner(legs, graded)}</div>`;
 }
-// the 1X2 as a prediction row for a settled game: our called winner vs what happened
+// the 1X2 as a prediction row for a settled game: the called winner vs what happened. Model sports
+// grade the model's call; anchor-only sports grade the market favorite (the ledger IS the market).
 function _matchResultRow(r) {
-  const mi = [r.model_a, r.model_draw, r.model_b];
-  const pick = mi.indexOf(Math.max(...mi));
+  const hasModel = r.model_a != null;
+  const src = hasModel ? [r.model_a, r.model_draw, r.model_b] : [r.market_a, r.market_draw || 0, r.market_b];
+  const pick = src.indexOf(Math.max(...src));
   const called = pick === 1 ? "Draw" : teamName(pick === 0 ? r.team_a : r.team_b);
   const actual = r.actual_outcome === "a" ? teamName(r.team_a) : r.actual_outcome === "b" ? teamName(r.team_b) : "Draw";
-  const mark = r.hit_model ? '<span class="pred-ok">✓</span>' : '<span class="pred-no">✗</span>';
-  return `<div class="pred pred-result ${r.hit_model ? "pred-won" : "pred-lost"}"><span class="pred-l">Match result</span><span class="pred-g">${esc(called)}</span><span class="pred-a">${esc(actual)} ${mark}</span></div>`;
+  const hit = hasModel ? !!r.hit_model
+    : (pick === 0 && r.actual_outcome === "a") || (pick === 2 && r.actual_outcome === "b");
+  const mark = hit ? '<span class="pred-ok">✓</span>' : '<span class="pred-no">✗</span>';
+  const label = hasModel ? "Match result" : "Market favorite";
+  return `<div class="pred pred-result ${hit ? "pred-won" : "pred-lost"}"><span class="pred-l">${label}</span><span class="pred-g">${esc(called)}</span><span class="pred-a">${esc(actual)} ${mark}</span></div>`;
 }
 // per-market hit rate across settled games (only counts legs that actually graded)
 function _legAccuracy(settled) {
@@ -184,28 +195,36 @@ function _legAccuracy(settled) {
 function _forecastCard(c) {
   const badge = c.frozen
     ? `<span class="tag pin" title="frozen ${esc(c.lock_ts || "")}">locked</span>`
-    : `<span class="tag" title="live model line, not yet part of the record">preview</span>`;
+    : `<span class="tag" title="live line, not yet part of the record">preview</span>`;
+  const hasModel = c.model && c.model[0] != null;   // anchor-only sports lock the market line alone
   // biggest model-vs-market disagreement across the three outcomes, flagged when it is material
-  const gap = Math.round(Math.max(...[0, 1, 2].map((i) => Math.abs(c.model[i] - c.market[i]))) * 100);
+  const gap = hasModel ? Math.round(Math.max(...[0, 1, 2].map((i) => Math.abs(c.model[i] - c.market[i]))) * 100) : 0;
   const gapChip = gap >= 8 ? ` <span class="tag gap" title="largest model vs market gap">Δ${gap}pp</span>` : "";
+  const modelRow = hasModel
+    ? `<div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>` : "";
   return `<div class="fcard">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(c.a))}</b> <span class="muted">v</span> <b>${esc(teamName(c.b))}</b></span><span class="fcard-k muted">${_koLabel(c.kickoff_iso)} ${badge}${gapChip}</span></div>
     <div class="fcard-leg muted"><span>${esc(teamName(c.a))}</span><span>Draw</span><span>${esc(teamName(c.b))}</span></div>
-    <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>
+    ${modelRow}
     <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
     ${_predRows(c.legs, false)}
   </div>`;
 }
 // settled game recap: the model line, our called result, then every prop predicted vs actual
 function _settledCard(r) {
-  const m = [r.model_a, r.model_draw, r.model_b];
+  const hasModel = r.model_a != null;
   const score = `${r.actual_a}-${r.actual_b}${r.pens ? " (pens)" : ""}`;
-  const brier = (r.brier_model != null && r.brier_market != null)
-    ? `<div class="fcard-brier muted" title="model 1X2 Brier vs the market frozen at lock (lower is better)">1X2 Brier ${r.brier_model.toFixed(2)} <span class="${r.brier_model < r.brier_market ? "pos" : "neg"}">vs market ${r.brier_market.toFixed(2)}</span></div>` : "";
+  const lineRow = hasModel
+    ? `<div class="fcard-row"><span class="fcard-t">Model</span>${_triBar([r.model_a, r.model_draw, r.model_b], r.team_a, r.team_b)}<span class="fcard-n">${_trip([r.model_a, r.model_draw, r.model_b])}</span></div>`
+    : `<div class="fcard-row"><span class="fcard-t">Market</span>${_triBar([r.market_a, r.market_draw || 0, r.market_b], r.team_a, r.team_b)}<span class="fcard-n">${_trip([r.market_a, r.market_draw || 0, r.market_b])}</span></div>`;
+  const brier = (hasModel && r.brier_model != null && r.brier_market != null)
+    ? `<div class="fcard-brier muted" title="model 1X2 Brier vs the market frozen at lock (lower is better)">1X2 Brier ${r.brier_model.toFixed(2)} <span class="${r.brier_model < r.brier_market ? "pos" : "neg"}">vs market ${r.brier_market.toFixed(2)}</span></div>`
+    : (r.brier_market != null
+      ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}</div>` : "");
   return `<div class="fcard settled">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b></span><span class="fcard-k"><b>${esc(score)}</b> <span class="muted">${esc((r.commence_time || "").slice(0, 10))}</span></span></div>
     <div class="fcard-leg muted"><span>${esc(teamName(r.team_a))}</span><span>Draw</span><span>${esc(teamName(r.team_b))}</span></div>
-    <div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(m, r.team_a, r.team_b)}<span class="fcard-n">${_trip(m)}</span></div>
+    ${lineRow}
     <div class="preds">${_matchResultRow(r)}${_predRowsInner(r.legs, true)}</div>
     ${brier}
   </div>`;
@@ -213,7 +232,16 @@ function _settledCard(r) {
 function _ledgerScore(s) {
   const open = s.locked_pending ? `<span class="muted">${s.locked_pending} locked, awaiting result</span>` : "";
   if (!s.ready) {
-    return `<div class="cal-note">${ico("track")} <b>${s.n}</b> of ${s.min_n} graded forecasts. Aggregate scores stay hidden until ${s.min_n} settle, so a couple of games cannot masquerade as a verdict. Each game below is still graded on its own. ${open}</div>`;
+    // anchor-only sports have no model column; the market's own calibration is the scoreboard
+    if (s.market_n >= s.min_n && s.market_brier != null) {
+      return `<div class="summary lg-score">
+        <div class="stat"><div class="label">Market Brier</div><div class="val">${s.market_brier}</div></div>
+        <div class="stat"><div class="label">Market favorite hit rate</div><div class="val">${s.market_hit_rate}%</div></div>
+        <div class="stat"><div class="label">Graded games</div><div class="val">${s.market_n}</div></div>
+      </div>
+      <div class="cal-note muted">Anchor-only ledger: the de-vigged market line locks before each game and grades itself. No model rides here by design. ${open}</div>`;
+    }
+    return `<div class="cal-note">${ico("track")} <b>${s.market_n != null && s.n === 0 ? s.market_n : s.n}</b> of ${s.min_n} graded forecasts. Aggregate scores stay hidden until ${s.min_n} settle, so a couple of games cannot masquerade as a verdict. Each game below is still graded on its own. ${open}</div>`;
   }
   const skill = s.skill_vs_market;
   const scls = skill == null ? "" : skill > 0 ? "pos" : "neg";

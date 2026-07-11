@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
-from . import config, memory, picks, reasoning, smartmoney
+from . import config, memory, picks, reasoning, smartmoney, sports
 from .engine import edges, odds_math
 from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
@@ -185,7 +185,7 @@ async def get_results(force: bool = False) -> list[dict]:
             and (time.monotonic() - _results_cache["ts"]) < config.RESULTS_CACHE_TTL):
         return _results_cache["data"]
     dates = [(date.today() - timedelta(days=i)).strftime("%Y%m%d")
-             for i in range(config.RESULTS_WINDOW_DAYS)]
+             for i in range(sports.active().results_window_days)]
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             data = await espn.fetch_results(client, dates)
@@ -299,6 +299,10 @@ def _slate_matchups(markets: list[Market]) -> list[dict]:
     return out
 
 
+async def _noop(value):
+    return value
+
+
 def _parse_iso(s: str | None) -> datetime | None:
     if not s:
         return None
@@ -406,26 +410,54 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
     lives. team_a/team_b are the two keys sorted, so a game maps to one stable row (the model is
-    neutral-venue, so the slot assignment is arbitrary but consistent for model, market, and grading)."""
+    neutral-venue, so the slot assignment is arbitrary but consistent for model, market, and grading).
+
+    Arity comes from the adapter (soccer 3-way with a draw leg; MLB 2-way, draw prob 0 by settlement
+    definition). With no model (anchor-only sports) the board is MARKET-only: the de-vigged line locks
+    and grades on its own, which is the anchor-first thesis made literal. Doubleheaders (same pair
+    twice on a date) get distinct rows via the market's embedded start time, but the pair-keyed
+    kickoff map cannot say which game is which, so those rows never lock and age out honestly
+    instead of guessing."""
     today = now.date().isoformat()
+    arity3 = "draw" in sports.active().outcomes
     cands: list[dict] = []
     board: dict = {}
+    # (date, pair) -> distinct START TIMES. Only time-qualified markets (Kalshi tickers) can attest a
+    # doubleheader: a date-only twin of the SAME game from another source (Odds API) must not fabricate
+    # one, or the whole slate would be DH-flagged and nothing would ever lock.
+    pair_games: dict = {}
+    for m in markets:
+        if m.market_type == "moneyline":
+            t = sorted(s.key for s in m.selections if s.key != "draw")[:2]
+            ct = m.commence_time or ""
+            if len(t) == 2 and len(ct) > 10:
+                pair_games.setdefault((ct[:10], tuple(t)), set()).add(ct[11:16])
     for m in markets:
         if m.market_type != "moneyline":
             continue
         draw = next((s for s in m.selections if s.key == "draw"), None)
         teams = sorted((s for s in m.selections if s.key != "draw"), key=lambda s: s.key)
-        if draw is None or draw.fair_prob is None or len(teams) < 2:
-            continue                              # need a clean 3-way de-vigged benchmark
+        if arity3 and (draw is None or draw.fair_prob is None):
+            continue                              # 3-way needs a clean de-vigged draw leg
+        if len(teams) < 2:
+            continue
         teams = teams[:2]
         if teams[0].fair_prob is None or teams[1].fair_prob is None:
             continue
         a, b = teams[0].key, teams[1].key
         mp = model.match_probs(a, b) if model else None
-        if not mp:
-            continue                              # model can't price both teams
+        if model and not mp:
+            continue                              # model present but can't price both teams
         gdate = (m.commence_time or "")[:10]
-        ko = kickoffs.get(frozenset((a, b)))
+        doubleheader = len(pair_games.get((gdate, (a, b)), ())) > 1
+        if doubleheader:
+            ko = None                              # pair-keyed kickoffs cannot say which DH game is which
+        elif sports.active().pair_only_key:
+            ko = kickoffs.get(frozenset((a, b)))   # WC: a pair plays once, the pair key is exact
+        else:
+            # daily sports: the same pair repeats across a series, so only the date-qualified kickoff
+            # is trustworthy (both sides of the lookup group by the same US-local scoreboard date)
+            ko = kickoffs.get((frozenset((a, b)), gdate))
         kdt = _parse_iso(ko)
         # Forward-only, KICKOFF-aware: a game leaves the sheet only once it has actually kicked off. The
         # market date can lag a late kickoff by a day (a 01:00-03:00Z kickoff carries the previous day's
@@ -435,11 +467,13 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             continue
         missed = bool(kdt) and now >= kdt
         lock_now = bool(kdt) and (kdt - timedelta(minutes=buffer_min)) <= now < kdt
-        ma, md, mb = teams[0].fair_prob, draw.fair_prob, teams[1].fair_prob
+        ma, mb = teams[0].fair_prob, teams[1].fair_prob
+        md = draw.fair_prob if arity3 else 0.0
         tot = ma + md + mb
         if tot <= 0:
             continue
-        dedup = f"fc|{gdate}|{a}|{b}"
+        disc = (m.commence_time or "")[11:16]      # start time when the source embeds one (MLB tickers)
+        dedup = f"fc|{gdate}|{a}|{b}" + (f"|{disc}" if disc else "")
         if not missed:                             # never log a new pending row for a started game
             cands.append({"match": m.event, "team_a": a, "team_b": b,
                           "commence_time": gdate, "stage": None, "dedup_key": dedup})
@@ -447,7 +481,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
                                    if q.source in config.SHARP_SOURCES}))
         board[dedup] = {
             "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
-            "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)),
+            "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
             "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
             "sources": sources,
             "legs": _predict_legs(model, corner_rates, a, b, poss, perf),
@@ -1402,11 +1436,12 @@ async def futures_scenario(pins: list[dict]) -> dict:
 # --------------------------------------------------------------------------- #
 async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                          reason: bool = False) -> dict:
+    caps = sports.active().capabilities        # adapter capability flags gate the sport-specific stacks
     free_markets, props = await get_free(force=force)
     odds, odds_meta = await get_odds_markets(refresh=refresh_odds)
     markets = _merge(free_markets + odds)
 
-    model = await asyncio.to_thread(ratings.get_model)
+    model = await asyncio.to_thread(ratings.get_model) if "model" in caps else None
     _attach_model(markets, model)
 
     # The user only bets match moneylines (+ props). We compute the sharp fair line for every
@@ -1423,45 +1458,56 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # smart money — now match-level: whale backing on the actual games on the slate, not the
     # tournament-winner market. Derive the matchups (favorites scoped to the horizon) first.
     matchups = _slate_matchups(markets)
-    smart, lineups = await asyncio.gather(         # independent free sources (Polymarket / ESPN)
-        get_smart_money(matchups, force=force),
-        get_lineups(matchups, force=force))        # confirmed XIs for today's games
+    if "smartmoney" in caps or "lineups" in caps:
+        smart, lineups = await asyncio.gather(     # independent free sources (Polymarket / ESPN)
+            get_smart_money(matchups, force=force) if "smartmoney" in caps else _noop({}),
+            get_lineups(matchups, force=force) if "lineups" in caps else _noop({}))
+    else:
+        smart, lineups = {}, {}
     picks_board = picks.generate(markets, props, model, config, smart)
 
     # Finished games (goals + free ESPN box stats: possession, corners, shots, SOT). Fetched here so the
     # corners model and the prediction sheet can use measured territory/volume. Cached, reused below.
     results = await get_results(force=force)
-    poss_shares = _possession_shares(results)
-    perf_mult = _perf_mult(results)              # forward-graded performance-aware variant (finishing -> SOT volume)
+    poss_shares = _possession_shares(results) if "corners" in caps else None
+    perf_mult = _perf_mult(results) if "model" in caps else None   # forward-graded perf variant
 
     # corners: a dominance market handled like any other bet: project total + per-team from accumulated
     # team rates (opponent + possession adjusted), priced against the de-vigged book total line. Corner
-    # rates now merge the API-Football cache (keyed, partial) with free ESPN box scores (every team).
-    corner_rates = {**corners.build_team_corner_rates(),
-                    **corners.rates_from_results(results)}
-    corner_lines = await get_corner_lines(refresh=refresh_odds, matchups=matchups)
+    # rates merge the API-Football cache (keyed, partial) with free ESPN box scores (every team).
+    if "corners" in caps:
+        corner_rates = {**corners.build_team_corner_rates(),
+                        **corners.rates_from_results(results)}
+        corner_lines = await get_corner_lines(refresh=refresh_odds, matchups=matchups)
+        picks_board["corners"] = _corners_board(matchups, corner_rates, corner_lines, model)
+    else:
+        corner_rates = None
+        picks_board["corners"] = []
     odds_meta["credits_remaining"] = _odds_state["credits_remaining"]   # corners spent after odds_meta was built
     odds_meta["credits_low"] = (odds_meta["credits_remaining"] is not None
                                 and odds_meta["credits_remaining"] < config.ODDS_CREDIT_FLOOR)
-    picks_board["corners"] = _corners_board(matchups, corner_rates, corner_lines, model)
+
+    # corner counts feed the corner-bet settle + forecast-leg grading; other sports skip API-Football
+    team_stats = await get_team_stats(results) if "corners" in caps else {}
 
     # Futures: tournament sim (second opinion) vs the de-vigged Polymarket winner/group-winner line.
     # (results fetched above so the sim locks in already-played group games.)
-    team_stats = await get_team_stats(results)   # corner counts: corner-bet settle AND forecast-leg grading
-    _fb = await get_futures(markets, model, results)
-    # settle logged leans (capture the moving close + resolve decided stages) then attach them fresh each
-    # snapshot, outside the cached sim, so a just-logged lean shows immediately with current drift/CLV.
-    _field = _load_groups_disk()
-    if _valid_field(_field):
-        leans.settle(_fb.get("rows", []), results, _field)
-    picks_board["futures"] = {**_fb, "leans": leans.enrich(_fb.get("rows", []))}
+    if "futures" in caps:
+        _fb = await get_futures(markets, model, results)
+        # settle logged leans (capture the moving close + resolve decided stages) then attach them fresh
+        # each snapshot, outside the cached sim, so a just-logged lean shows immediately with drift/CLV.
+        _field = _load_groups_disk()
+        if _valid_field(_field):
+            leans.settle(_fb.get("rows", []), results, _field)
+        picks_board["futures"] = {**_fb, "leans": leans.enrich(_fb.get("rows", []))}
 
     # Model Ledger: freeze a pre-kickoff 1X2 forecast (the model AND the de-vigged market, at the same
     # instant) for every upcoming game, then auto-grade both against the result. Forward-only and free:
     # it reuses the de-vigged moneyline lines, the ESPN kickoffs, and the ESPN results already in hand.
     # Isolated like get_futures: the Model Ledger is an optional second opinion, so a DB/settlement error
     # here must degrade only the ledger, never take down Best Bets / Research / Futures / Track Record.
-    if config.FORECAST_ENABLED and model:
+    # Anchor-only sports (no model) run the ledger MARKET-only: the de-vigged line locks and grades.
+    if config.FORECAST_ENABLED:
         try:
             now_utc = datetime.now(timezone.utc)
             fdates = sorted({(m.commence_time or "").replace("-", "")[:8] for m in markets
@@ -1561,6 +1607,9 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "meta": {
+            "sport": sports.active().key,
+            "sport_name": sports.active().display_name,
+            "capabilities": sorted(caps),
             "model_loaded": model is not None,
             "sources_live": sources_live,
             "odds": odds_meta,

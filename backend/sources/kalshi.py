@@ -130,9 +130,13 @@ async def fetch_resolved(client: httpx.AsyncClient) -> list[dict]:
 
     Each child market is a Yes/No on one outcome (team-to-win or Tie); a settled market's
     `result` is "yes"/"no". Returns one row per team outcome:
-    {date, team_key, label, result: won|lost|void, match}. A favorite-ML pick on a team that
-    drew or lost both resolve "no" → lost (the draw-is-a-loss reality of a 3-way ML)."""
-    out: list[dict] = []
+    {date, team_key, label, result: won|lost|void, match}.
+
+    3-way (soccer): a team that drew or lost both resolve "no" -> lost (draw-is-a-loss reality).
+    2-way (MLB/UFC): an event where NEITHER leg settled "yes" is a postponement/cancellation, not a
+    loss; both legs grade VOID so a rainout can never poison the track record."""
+    two_way = "draw" not in active().outcomes
+    events: dict[str, list[dict]] = {}
     seen: set[str] = set()
     for status in ("settled", "closed"):  # Kalshi rejects status=finalized with a 400
         for m in await _fetch_series(client, active().kalshi_resolved_series, status=status):
@@ -143,13 +147,20 @@ async def fetch_resolved(client: httpx.AsyncClient) -> list[dict]:
             label = m.get("yes_sub_title") or ""
             res = (m.get("result") or "").lower()
             if not label or res not in ("yes", "no"):
-                continue  # unresolved/void or the Tie leg with no usable result
-            ev_ticker = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
+                continue  # unresolved leg (no usable result yet)
+            ev = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
+            events.setdefault(ev, []).append({"label": label, "res": res, "title": m.get("title") or ""})
+
+    out: list[dict] = []
+    for ev, legs in events.items():
+        date = (kalshi_ticker_date(ev) or "")[:10] or None    # date-only: settlement matches on the day
+        voided = two_way and len(legs) >= 2 and all(l["res"] == "no" for l in legs)
+        for l in legs:
             out.append({
-                "date": kalshi_ticker_date(ev_ticker),
-                "team_key": normalize_team(label),
-                "label": label,
-                "result": "won" if res == "yes" else "lost",
-                "match": (m.get("title") or "").replace(" Winner?", "").strip(),
+                "date": date,
+                "team_key": normalize_team(l["label"]),
+                "label": l["label"],
+                "result": "void" if voided else ("won" if l["res"] == "yes" else "lost"),
+                "match": l["title"].replace(" Winner?", "").strip(),
             })
     return out
