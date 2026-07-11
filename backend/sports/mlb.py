@@ -69,6 +69,8 @@ MLB = register(SportAdapter(
         "KXMLBGAME": ("moneyline", "Matches"),
         # per-LINE 2-way markets (over/under de-vigged within each line, never across lines)
         "KXMLBTOTAL": ("total", "Lines"),
+        # first-5-innings winner is a genuine 3-way (team/tie/team): the grouped parser handles it
+        "KXMLBF5": ("f5_moneyline", "Lines"),
         # player props, also per-line yes/no; the group slot carries the stat label
         "KXMLBHIT": ("player_prop", "hits"),
         "KXMLBHR": ("player_prop", "home runs"),

@@ -268,3 +268,26 @@ def test_prop_pair_split_via_learned_codes():
     assert _prop_pair("KXMLBHR-26JUL111410ATHCWS", codes) == ("athletics", "chicago white sox")
     assert _prop_pair("KXMLBOUTS-26JUL121610AZLAD", codes) == ("arizona diamondbacks", "los angeles dodgers")
     assert _prop_pair("KXMLBHIT-26JUL111610XXYY", codes) is None
+
+
+def test_f5_leg_grades_from_linescores(monkeypatch):
+    monkeypatch.setattr(config, "SPORT", "mlb")
+    paper = _fresh_paper()
+    key = "fc|2026-07-12|boston red sox|new york yankees|19:05"
+    paper.log_forecasts([{"match": "x", "team_a": "boston red sox", "team_b": "new york yankees",
+                          "commence_time": "2026-07-12", "stage": None, "dedup_key": key}],
+                        today="2026-07-12")
+    legs = [{"key": "f5", "side": "new york yankees", "line": None, "team": None,
+             "prob": 0.44, "proj": None}]
+    paper.lock_forecasts({key: {"lock_now": True, "missed": False, "kickoff_iso": "2026-07-12T23:05Z",
+                                "model": None, "market": (0.5, 0.0, 0.5), "sources": "kalshi",
+                                "legs": legs}}, "2026-07-12T21:50:00Z")
+    # Yankees lead 3-1 after five, Boston wins 6-5 late: the F5 call still WINS while the ML pick loses
+    results = [{"date": "2026-07-12", "goals": {"boston red sox": 6, "new york yankees": 5},
+                "winner": "boston red sox", "iso": "2026-07-12T23:05Z",
+                "innings": {"boston red sox": [0, 1, 0, 0, 0, 2, 0, 3, 0],
+                            "new york yankees": [2, 0, 1, 0, 0, 0, 1, 1, 0]}}]
+    paper.settle_forecasts(results, None)
+    leg = paper.list_forecasts()[0]["legs"][0]
+    assert leg["result"] == "won"
+    os.unlink(config.DB_PATH)

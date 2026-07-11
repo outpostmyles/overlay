@@ -351,6 +351,21 @@ def _props_by_game(markets: list) -> dict:
     return out
 
 
+def _f5_by_game(markets: list) -> dict:
+    """{(team_pair, commence[:16]): {team_key/draw: fair}} from the de-vigged first-5-innings 3-way.
+    The pair comes straight from the selection keys (they ARE the team keys, plus the tie leg)."""
+    out: dict = {}
+    for m in markets:
+        if m.market_type != "f5_moneyline":
+            continue
+        fair = {s.key: s.fair_prob for s in m.selections if s.fair_prob is not None}
+        teams = [k for k in fair if k != "draw"]
+        if len(teams) != 2 or "draw" not in fair:
+            continue
+        out[(frozenset(teams), (m.commence_time or "")[:16])] = fair
+    return out
+
+
 def _kalshi_props_board(markets: list) -> list[dict]:
     """De-vigged player-prop rows from Kalshi ({player, stat, line, fair over%, event, date}). The stat
     label rides in Market.group. Display + research only in Phase 1; auto-grading lands with the ESPN
@@ -482,7 +497,7 @@ def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
                     now: datetime, corner_rates=None, poss=None, perf=None,
-                    totals=None, props=None) -> tuple[list[dict], dict]:
+                    totals=None, props=None, f5=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -565,6 +580,14 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             legs.append({"key": "total_goals", "side": "over" if fair_over >= 0.5 else "under",
                          "line": line, "team": None,
                          "prob": round(max(fair_over, 1 - fair_over), 3), "proj": None})
+        # first-5-innings call: the de-vigged 3-way's favorite locks and grades off the linescores.
+        # Far-out F5 books sit at placeholder quotes (all legs equal, de-vig = exact thirds); only a
+        # book with a real favorite is information worth locking.
+        game_f5 = (f5 or {}).get((frozenset((a, b)), (m.commence_time or "")[:16]))
+        if game_f5 and max(game_f5.values()) >= 0.40:
+            pick = max(game_f5, key=game_f5.get)
+            legs.append({"key": "f5", "side": "tie" if pick == "draw" else pick, "line": None,
+                         "team": None, "prob": round(game_f5[pick], 3), "proj": None})
         # the game's most competitive player props (closest to a coin flip) lock as graded legs too
         game_props = (props or {}).get((frozenset((a, b)), (m.commence_time or "")[:16])) or []
         for pr in sorted(game_props, key=lambda x: abs(x["fair"] - 0.5))[:3]:
@@ -1615,7 +1638,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
                                              corner_rates, poss_shares, perf_mult,
                                              totals=_totals_by_game(markets),
-                                             props=_props_by_game(markets))
+                                             props=_props_by_game(markets),
+                                             f5=_f5_by_game(markets))
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)

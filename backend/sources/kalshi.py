@@ -18,6 +18,8 @@ from ..sports import active
 # soccer knockout games are listed as regulation-time markets ("Reg Time: Germany"); strip the
 # wrapper from display labels (adapter-gated) so cards read "Germany", not "Reg Time: Germany"
 _REG_TIME = re.compile(r"\breg(?:ular|ulation)?\.?\s*time\b\s*:?\s*", re.IGNORECASE)
+# F5 legs phrase the pick as a sentence ("Pittsburgh wins first 5 innings"); strip to the team
+_F5_WORDS = re.compile(r"\bwins?\s+first\s+5\s+innings(\s+winner)?\b", re.IGNORECASE)
 
 
 def _clean(text: str) -> str:
@@ -27,7 +29,7 @@ def _clean(text: str) -> str:
     text = text or ""
     if active().kalshi_strip_reg_time:
         text = _REG_TIME.sub("", text)
-    return text
+    return _F5_WORDS.sub("", text).strip()
 
 
 def _prob(dollars) -> float | None:

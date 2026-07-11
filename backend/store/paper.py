@@ -737,7 +737,7 @@ def _ou_result(side: str, actual, line) -> str:
 
 
 def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, corners_total,
-                players: dict | None = None) -> list[dict]:
+                players: dict | None = None, innings: dict | None = None) -> list[dict]:
     """Grade each extra-market leg against the result. Goals markets settle off the ESPN score; the
     corners leg needs an API-Football count; player props settle off the ESPN box-score player lines
     (a posted box score without the player = DNP = void, the standard prop convention)."""
@@ -756,6 +756,12 @@ def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, co
         elif k == "btts":
             actual = "yes" if (ga > 0 and gb > 0) else "no"
             result = "won" if side == actual else "lost"
+        elif k == "f5":
+            ia, ib = (innings or {}).get(team_a), (innings or {}).get(team_b)
+            if ia and ib and len(ia) >= 5 and len(ib) >= 5:
+                fa, fb = sum(ia[:5]), sum(ib[:5])
+                actual = team_a if fa > fb else team_b if fb > fa else "tie"
+                result = "won" if side == actual else "lost"
         elif k == "player_prop":
             pl = (players or {}).get(leg.get("player_key") or "")
             if pl is not None:
@@ -836,7 +842,7 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
                 legs = []
             graded = _grade_legs(legs, ga, gb, r["team_a"], r["team_b"],
                                  corners_idx.get(frozenset((r["team_a"], r["team_b"]))),
-                                 players=g.get("players"))
+                                 players=g.get("players"), innings=g.get("innings"))
             if r["status"] == "locked":
                 outcome = "a" if ga > gb else "b" if gb > ga else "draw"
                 oi = _OUTCOME_IDX[outcome]

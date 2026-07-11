@@ -221,7 +221,8 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 if eid != _DONE_KEY and c.get("date") == iso:
                     out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                                 "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                                "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {}})
+                                "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {},
+                                "innings": c.get("innings") or {}})
             continue
         try:
             sb = (await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)).json()
@@ -245,15 +246,30 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             hit = cache.get(eid)
             if hit and "box" in hit and ("players" in hit or not need_players):
                 c = hit                                 # (pre-box / pre-players entries fall through to backfill)
+                inn = c.get("innings") or {}
+                if not inn:                             # linescores ride the scoreboard we already hold
+                    try:
+                        for cc in ev["competitions"][0]["competitors"]:
+                            ls = cc.get("linescores") or []
+                            if ls:
+                                inn[normalize_team((cc.get("team") or {}).get("displayName"))] = [
+                                    int(float(x.get("value", 0) or 0)) for x in ls]
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        inn = {}
+                    if inn:
+                        c["innings"] = inn
+                        new_cached += 1                 # persist the backfill
                 out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                             "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                            "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {}})
+                            "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {},
+                            "innings": inn})
                 continue
             try:
                 comp = ev["competitions"][0]["competitors"]
             except (KeyError, IndexError, TypeError):
                 continue
             goals: dict = {}
+            innings: dict = {}                     # per-inning runs when the scoreboard carries linescores
             winner = None                          # the advancing team (ESPN's flag includes ET/penalties)
             for cc in comp:
                 tk = normalize_team((cc.get("team") or {}).get("displayName"))
@@ -263,6 +279,12 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                     goals[tk] = None
                 if cc.get("winner"):
                     winner = tk
+                ls = cc.get("linescores") or []
+                if ls:
+                    try:
+                        innings[tk] = [int(float(x.get("value", 0) or 0)) for x in ls]
+                    except (TypeError, ValueError):
+                        pass
             if not goals or any(v is None for v in goals.values()):
                 continue
             scorers: set = set()
@@ -291,14 +313,14 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 cache[eid] = {"date": _iso(d), "goals": goals, "winner": winner,
                               "scorers": sorted(scorers), "played": sorted(played), "box": box,
                               "iso": ev.get("date"),    # scheduled start: the doubleheader disambiguator
-                              "players": players}
+                              "players": players, "innings": innings}
                 new_cached += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
                 players = {}
             out.append({"date": _iso(d), "goals": goals, "winner": winner,
                         "scorers": scorers, "played": played, "box": box, "iso": ev.get("date"),
-                        "players": players})
+                        "players": players, "innings": innings})
     if new_cached or new_done:
         cache[_DONE_KEY] = sorted(done)
         _save_results_cache(cache)
