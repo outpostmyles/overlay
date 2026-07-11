@@ -215,3 +215,56 @@ def test_track_record_reads_are_sport_scoped(monkeypatch):
     monkeypatch.setattr(config, "SPORT", "wc26")
     assert [p["dedup_key"] for p in paper.list_picks()] == ["wc-1"]
     os.unlink(config.DB_PATH)
+
+
+def test_espn_player_lines_extraction():
+    from backend.sources import espn
+    summary = {"boxscore": {"players": [
+        {"statistics": [
+            {"type": "batting", "keys": ["hits-atBats", "atBats", "runs", "hits", "RBIs", "homeRuns"],
+             "athletes": [{"athlete": {"displayName": "Trea Turner"},
+                           "stats": ["2-4", "4", "1", "2", "0", "1"]}]},
+            {"type": "pitching", "keys": ["fullInnings.partInnings", "hits", "runs"],
+             "athletes": [{"athlete": {"displayName": "Aaron Nola"},
+                           "stats": ["5.2", "3", "2"]}]},
+        ]}]}}
+    pl = espn._player_lines(summary)
+    assert pl["trea turner"] == {"hits": 2, "home runs": 1}
+    assert pl["aaron nola"]["outs recorded"] == 17          # 5.2 innings = 17 outs
+
+
+def test_prop_legs_grade_from_player_lines(monkeypatch):
+    monkeypatch.setattr(config, "SPORT", "mlb")
+    paper = _fresh_paper()
+    key = "fc|2026-07-12|athletics|chicago white sox|14:10"
+    paper.log_forecasts([{"match": "x", "team_a": "athletics", "team_b": "chicago white sox",
+                          "commence_time": "2026-07-12", "stage": None, "dedup_key": key}],
+                        today="2026-07-12")
+    legs = [
+        {"key": "player_prop", "stat": "outs recorded", "player": "Joe Ryan",
+         "player_key": "joe ryan", "line": 17.5, "team": None, "side": "over", "prob": 0.55, "proj": None},
+        {"key": "player_prop", "stat": "hits", "player": "Ghost Guy",
+         "player_key": "ghost guy", "line": 1.5, "team": None, "side": "over", "prob": 0.5, "proj": None},
+    ]
+    paper.lock_forecasts({key: {"lock_now": True, "missed": False, "kickoff_iso": "2026-07-12T18:10Z",
+                                "model": None, "market": (0.55, 0.0, 0.45), "sources": "kalshi",
+                                "legs": legs}}, "2026-07-12T16:55:00Z")
+    results = [{"date": "2026-07-12", "goals": {"athletics": 5, "chicago white sox": 2},
+                "winner": "athletics", "iso": "2026-07-12T18:10Z",
+                "players": {"joe ryan": {"outs recorded": 18}}}]
+    paper.settle_forecasts(results, None)
+    got = {l["player_key"]: l for l in paper.list_forecasts()[0]["legs"]}
+    assert got["joe ryan"]["result"] == "won" and got["joe ryan"]["actual"] == 18
+    assert got["ghost guy"]["result"] == "void"             # box score posted, player absent = DNP
+    os.unlink(config.DB_PATH)
+
+
+def test_prop_pair_split_via_learned_codes():
+    from backend.sources.kalshi import _prop_pair
+    codes = {"CLE": "cleveland guardians", "MIA": "miami marlins",
+             "ATH": "athletics", "CWS": "chicago white sox", "AZ": "arizona diamondbacks",
+             "LAD": "los angeles dodgers"}
+    assert _prop_pair("KXMLBHIT-26JUL111610CLEMIA", codes) == ("cleveland guardians", "miami marlins")
+    assert _prop_pair("KXMLBHR-26JUL111410ATHCWS", codes) == ("athletics", "chicago white sox")
+    assert _prop_pair("KXMLBOUTS-26JUL121610AZLAD", codes) == ("arizona diamondbacks", "los angeles dodgers")
+    assert _prop_pair("KXMLBHIT-26JUL111610XXYY", codes) is None

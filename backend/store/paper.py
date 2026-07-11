@@ -736,9 +736,11 @@ def _ou_result(side: str, actual, line) -> str:
     return "won" if ((side == "over") == over) else "lost"
 
 
-def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, corners_total) -> list[dict]:
-    """Grade each extra-market leg against the result. Goals markets settle off the ESPN score; the corners
-    leg settles only when an API-Football count is supplied (else it stays pending and can grade later)."""
+def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, corners_total,
+                players: dict | None = None) -> list[dict]:
+    """Grade each extra-market leg against the result. Goals markets settle off the ESPN score; the
+    corners leg needs an API-Football count; player props settle off the ESPN box-score player lines
+    (a posted box score without the player = DNP = void, the standard prop convention)."""
     out = []
     for leg in legs:
         k = leg.get("key")
@@ -754,6 +756,13 @@ def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, co
         elif k == "btts":
             actual = "yes" if (ga > 0 and gb > 0) else "no"
             result = "won" if side == actual else "lost"
+        elif k == "player_prop":
+            pl = (players or {}).get(leg.get("player_key") or "")
+            if pl is not None:
+                actual = pl.get(leg.get("stat"))
+                result = _ou_result(side, actual, line) if actual is not None else "pending"
+            elif players:
+                result = "void"          # box score posted, player never appeared (DNP)
         elif k == "corners":
             if corners_total is not None:
                 actual = corners_total
@@ -826,7 +835,8 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
             except (TypeError, ValueError):
                 legs = []
             graded = _grade_legs(legs, ga, gb, r["team_a"], r["team_b"],
-                                 corners_idx.get(frozenset((r["team_a"], r["team_b"]))))
+                                 corners_idx.get(frozenset((r["team_a"], r["team_b"]))),
+                                 players=g.get("players"))
             if r["status"] == "locked":
                 outcome = "a" if ga > gb else "b" if gb > ga else "draw"
                 oi = _OUTCOME_IDX[outcome]

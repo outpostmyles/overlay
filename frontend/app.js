@@ -125,11 +125,14 @@ function _triBar(p, a, b) {
     + `<i class="t-b" style="width:${w(p[2])}%" title="${esc(teamName(b))} win ${Math.round(p[2] * 100)}%"></i></span>`;
 }
 // the model's explicit best guess on one extra market, as a labeled row
-const _predName = (l) => l.key === "total_goals" ? "Total goals"
+const _runsSport = () => ((state.snapshot || {}).meta || {}).sport === "mlb";
+const _predName = (l) => l.key === "total_goals" ? (_runsSport() ? "Total runs" : "Total goals")
   : l.key === "team_total" ? `${teamName(l.team)} goals`
   : l.key === "btts" ? "Both teams score"
+  : l.key === "player_prop" ? `${l.player || ""} ${l.stat || ""}`.trim()
   : l.key === "corners" ? "Corners" : l.key;
 const _predPick = (l) => l.key === "btts" ? (l.side === "yes" ? "Yes" : "No")
+  : l.key === "player_prop" ? (l.side === "over" ? `${Math.ceil(l.line)}+` : `Under ${Math.ceil(l.line)}`)
   : `${l.side === "over" ? "Over" : "Under"} ${l.line}`;
 // our guess = the projected number (the best estimate) + the resulting pick, e.g. "2.6 · Under 2.5"
 const _predGuess = (l) => (l.proj != null ? `${l.proj} · ` : "") + _predPick(l);
@@ -181,14 +184,15 @@ function _matchResultRow(r) {
 }
 // per-market hit rate across settled games (only counts legs that actually graded)
 function _legAccuracy(settled) {
-  const names = { total_goals: "Total goals", team_total: "Team totals", btts: "BTTS", corners: "Corners" };
+  const names = { total_goals: _runsSport() ? "Totals" : "Total goals", team_total: "Team totals",
+                  btts: "BTTS", corners: "Corners", player_prop: "Player props" };
   const tally = {};
   settled.forEach((r) => (r.legs || []).forEach((l) => {
     if (l.result !== "won" && l.result !== "lost") return;
     const t = tally[l.key] || (tally[l.key] = { w: 0, n: 0 });
     t.n++; if (l.result === "won") t.w++;
   }));
-  const cells = ["total_goals", "team_total", "btts", "corners"].filter((k) => tally[k])
+  const cells = ["total_goals", "team_total", "btts", "corners", "player_prop"].filter((k) => tally[k])
     .map((k) => `<span class="leg-acc"><b>${names[k]}</b> ${tally[k].w}/${tally[k].n}</span>`);
   return cells.length ? `<div class="cal-note muted">Our picks vs result: ${cells.join(" · ")}</div>` : "";
 }

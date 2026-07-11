@@ -70,7 +70,20 @@ async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "o
 _PER_LINE_TYPES = ("total", "player_prop")
 
 
-def _per_line_market(m: dict, series: str, mtype: str, group: str) -> Market | None:
+def _prop_pair(event_ticker: str, code_map: dict) -> tuple | None:
+    """'KXMLBHIT-26JUL111610CLEMIA-...' -> the two team keys, split greedily against the code map the
+    game series taught us (ticker team codes concatenate without a separator)."""
+    parts = (event_ticker or "").split("-")
+    if len(parts) < 2 or len(parts[1]) <= 11:
+        return None
+    seg = parts[1][11:]                       # after ddMONyyHHMM
+    for c1 in sorted(code_map, key=len, reverse=True):
+        if seg.startswith(c1) and seg[len(c1):] in code_map:
+            return code_map[c1], code_map[seg[len(c1):]]
+    return None
+
+
+def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dict) -> Market | None:
     """One Kalshi child (a single line) -> a 2-way Market (over/yes vs under/no)."""
     tkr = m.get("ticker") or ""
     ask = _prob(m.get("yes_ask_dollars"))
@@ -89,6 +102,11 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str) -> Market | N
                      implied_prob=prob, mid_prob=mid, fee=config.KALSHI_FEE_COEF,
                      volume=m.get("volume_fp"), link=f"https://kalshi.com/markets/{series.lower()}")
 
+    ev_ticker = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
+    if mtype == "player_prop":                # pack the game pair in so props can join their game
+        pair = _prop_pair(ev_ticker, code_map)
+        if pair:
+            group = f"{group}|{pair[0]}|{pair[1]}"
     return Market(
         market_id=f"kalshi:{tkr}",
         event=_clean(m.get("title") or "").rstrip("?").strip(),
@@ -97,18 +115,19 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str) -> Market | N
             Selection(key=f"over_{line}", label=label, quotes=[q(over, mid_over)]),
             Selection(key=f"under_{line}", label=f"Under ({label})", quotes=[q(under, 1.0 - mid_over)]),
         ],
-        commence_time=kalshi_ticker_date(m.get("event_ticker") or tkr.rsplit("-", 1)[0]),
+        commence_time=kalshi_ticker_date(ev_ticker),
         group=group,
     )
 
 
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
+    code_map: dict = {}   # ticker team code -> team key, learned from the game series' child suffixes
     for series, (mtype, group) in active().kalshi_series.items():
         raw = await _fetch_series(client, series)
         if mtype in _PER_LINE_TYPES:
             for m in raw:
-                built = _per_line_market(m, series, mtype, group)
+                built = _per_line_market(m, series, mtype, group, code_map)
                 if built:
                     markets.append(built)
             continue
@@ -124,6 +143,10 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
             for m in children:
                 label = _clean(m.get("yes_sub_title") or m.get("title") or "").strip()
                 title = _clean(m.get("title") or title).replace(" Winner?", "").strip()
+                if mtype == "moneyline" and label:      # teach the prop parser this team's ticker code
+                    code = (m.get("ticker") or "").rsplit("-", 1)[-1]
+                    if code:
+                        code_map[code] = normalize_team(label)
                 ask = _prob(m.get("yes_ask_dollars"))
                 bid = _prob(m.get("yes_bid_dollars"))
                 last = _prob(m.get("last_price_dollars"))

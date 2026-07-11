@@ -137,6 +137,43 @@ _BOX_FIELDS = {"possessionPct": "possession", "wonCorners": "corners",
                "totalShots": "shots", "shotsOnTarget": "sot"}
 
 
+def _player_lines(summary: dict) -> dict:
+    """{player_key: {"hits": n, "home runs": n, "outs recorded": n}} from an MLB box score; {} for
+    sports without batting/pitching groups (soccer). Outs come from innings pitched: '5.2' = 17."""
+    from ..matching import normalize_team
+    out: dict = {}
+    for tm in ((summary.get("boxscore") or {}).get("players") or []):
+        for grp in (tm.get("statistics") or []):
+            gtype = (grp.get("type") or grp.get("name") or "").lower()
+            keys = grp.get("keys") or []
+            if gtype == "batting" and "hits" in keys and "homeRuns" in keys:
+                hi, hri = keys.index("hits"), keys.index("homeRuns")
+                for a in (grp.get("athletes") or []):
+                    nm = normalize_team(((a.get("athlete") or {}).get("displayName")) or "")
+                    st = a.get("stats") or []
+                    if not nm or len(st) <= max(hi, hri):
+                        continue
+                    try:
+                        d = out.setdefault(nm, {})
+                        d["hits"] = int(st[hi])
+                        d["home runs"] = int(st[hri])
+                    except (TypeError, ValueError):
+                        continue
+            elif gtype == "pitching" and "fullInnings.partInnings" in keys:
+                ii = keys.index("fullInnings.partInnings")
+                for a in (grp.get("athletes") or []):
+                    nm = normalize_team(((a.get("athlete") or {}).get("displayName")) or "")
+                    st = a.get("stats") or []
+                    if not nm or len(st) <= ii:
+                        continue
+                    full, _, part = str(st[ii]).partition(".")
+                    try:
+                        out.setdefault(nm, {})["outs recorded"] = int(full) * 3 + int(part or 0)
+                    except (TypeError, ValueError):
+                        continue
+    return out
+
+
 def _box_stats(summary: dict) -> dict:
     """{team_key: {possession(0-1), corners, shots, sot}} from a match summary box score (or {}).
     Possession is stored as a fraction; the rest are raw counts. Free territory/volume signal for the
@@ -184,7 +221,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                 if eid != _DONE_KEY and c.get("date") == iso:
                     out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                                 "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                                "box": c.get("box") or {}, "iso": c.get("iso")})
+                                "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {}})
             continue
         try:
             sb = (await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)).json()
@@ -204,11 +241,13 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             if not (((ev.get("status") or {}).get("type") or {}).get("completed")):
                 continue
             eid = str(ev.get("id") or "")
-            if eid in cache and "box" in cache[eid]:   # finished + box already extracted, no /summary re-fetch
-                c = cache[eid]                          # (entries cached before box existed fall through to backfill)
+            need_players = any(mt == "player_prop" for mt, _ in active().kalshi_series.values())
+            hit = cache.get(eid)
+            if hit and "box" in hit and ("players" in hit or not need_players):
+                c = hit                                 # (pre-box / pre-players entries fall through to backfill)
                 out.append({"date": c["date"], "goals": c["goals"], "winner": c.get("winner"),
                             "scorers": set(c.get("scorers") or []), "played": set(c.get("played") or []),
-                            "box": c.get("box") or {}, "iso": c.get("iso")})
+                            "box": c.get("box") or {}, "iso": c.get("iso"), "players": c.get("players") or {}})
                 continue
             try:
                 comp = ev["competitions"][0]["competitors"]
@@ -248,14 +287,18 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                             if nm:
                                 played.add(normalize_team(nm))
                 box = _box_stats(s)
+                players = _player_lines(s)
                 cache[eid] = {"date": _iso(d), "goals": goals, "winner": winner,
                               "scorers": sorted(scorers), "played": sorted(played), "box": box,
-                              "iso": ev.get("date")}    # scheduled start: the doubleheader disambiguator
+                              "iso": ev.get("date"),    # scheduled start: the doubleheader disambiguator
+                              "players": players}
                 new_cached += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[espn] results summary {ev.get('id')} failed: {exc}")
+                players = {}
             out.append({"date": _iso(d), "goals": goals, "winner": winner,
-                        "scorers": scorers, "played": played, "box": box, "iso": ev.get("date")})
+                        "scorers": scorers, "played": played, "box": box, "iso": ev.get("date"),
+                        "players": players})
     if new_cached or new_done:
         cache[_DONE_KEY] = sorted(done)
         _save_results_cache(cache)

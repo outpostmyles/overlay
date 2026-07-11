@@ -327,6 +327,30 @@ def _totals_by_game(markets: list) -> dict:
     return out
 
 
+def _props_by_game(markets: list) -> dict:
+    """{(team_pair, commence[:16]): [prop dicts]} for props whose group packs the game pair (learned
+    from the game series' ticker codes). Feeds the ledger's graded prop legs."""
+    out: dict = {}
+    for m in markets:
+        if m.market_type != "player_prop":
+            continue
+        parts = (m.group or "").split("|")
+        over = next((s for s in m.selections if s.key.startswith("over_")), None)
+        if len(parts) != 3 or over is None or over.fair_prob is None:
+            continue
+        label = over.label or ""
+        player = label.split(":")[0].strip() if ":" in label else label
+        try:
+            line = float(over.key.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        key = (frozenset((parts[1], parts[2])), (m.commence_time or "")[:16])
+        out.setdefault(key, []).append({"stat": parts[0], "player": player,
+                                        "player_key": normalize_team(player),
+                                        "line": line, "fair": over.fair_prob})
+    return out
+
+
 def _kalshi_props_board(markets: list) -> list[dict]:
     """De-vigged player-prop rows from Kalshi ({player, stat, line, fair over%, event, date}). The stat
     label rides in Market.group. Display + research only in Phase 1; auto-grading lands with the ESPN
@@ -344,7 +368,8 @@ def _kalshi_props_board(markets: list) -> list[dict]:
             line = float(over.key.split("_", 1)[1])
         except (ValueError, IndexError):
             continue
-        rows.append({"player": player, "stat": m.group, "line": line,
+        stat = (m.group or "").split("|")[0]     # group may pack the game pair after the stat label
+        rows.append({"player": player, "stat": stat, "line": line,
                      "over_fair": round(over.fair_prob, 4),
                      "event": m.event, "commence_time": m.commence_time,
                      "days_out": picks._days_out((m.commence_time or "")[:10])})
@@ -457,7 +482,7 @@ def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
                     now: datetime, corner_rates=None, poss=None, perf=None,
-                    totals=None) -> tuple[list[dict], dict]:
+                    totals=None, props=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -540,6 +565,13 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             legs.append({"key": "total_goals", "side": "over" if fair_over >= 0.5 else "under",
                          "line": line, "team": None,
                          "prob": round(max(fair_over, 1 - fair_over), 3), "proj": None})
+        # the game's most competitive player props (closest to a coin flip) lock as graded legs too
+        game_props = (props or {}).get((frozenset((a, b)), (m.commence_time or "")[:16])) or []
+        for pr in sorted(game_props, key=lambda x: abs(x["fair"] - 0.5))[:3]:
+            legs.append({"key": "player_prop", "stat": pr["stat"], "player": pr["player"],
+                         "player_key": pr["player_key"], "line": pr["line"], "team": None,
+                         "side": "over" if pr["fair"] >= 0.5 else "under",
+                         "prob": round(max(pr["fair"], 1 - pr["fair"]), 3), "proj": None})
         board[dedup] = {
             "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
@@ -1582,7 +1614,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             fcands, fboard = _forecast_board(markets, model, fkicks,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
                                              corner_rates, poss_shares, perf_mult,
-                                             totals=_totals_by_game(markets))
+                                             totals=_totals_by_game(markets),
+                                             props=_props_by_game(markets))
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)
