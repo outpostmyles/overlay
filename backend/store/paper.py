@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS forecasts (
     legs_json TEXT,                  -- extra market predictions (total/team goals, BTTS, corners), frozen + graded
     status TEXT NOT NULL DEFAULT 'pending',   -- pending | locked | settled | void
     dedup_key TEXT UNIQUE,
-    sport TEXT                       -- multi-sport namespace; NULL on legacy rows means wc26
+    sport TEXT,                      -- multi-sport namespace; NULL on legacy rows means wc26
+    closing_a REAL, closing_draw REAL, closing_b REAL   -- the de-vigged line's CLOSE (last pre-start tick)
 );
 """
 
@@ -120,6 +121,9 @@ def init_paper() -> None:
             _alter(c, f"ALTER TABLE paper_picks ADD COLUMN {col} {typ}")
         _alter(c, "ALTER TABLE forecasts ADD COLUMN legs_json TEXT")
         _alter(c, "ALTER TABLE forecasts ADD COLUMN sport TEXT")
+        _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_a REAL")
+        _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_draw REAL")
+        _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_b REAL")
 
 
 def log_picks(rows: list[dict]) -> int:
@@ -791,6 +795,23 @@ def _corners_total_index(team_stats: dict | None) -> dict:
     return idx
 
 
+def capture_forecast_close(board: dict) -> None:
+    """Overwrite-until-start closing capture for LOCKED forecasts (the ledger's CLV analog): every
+    tick before the game begins rewrites closing_*, so the last pre-start write IS the close. Never
+    written once the game has started (live prices are not a closing line)."""
+    if not board:
+        return
+    with _conn() as c:
+        rows = c.execute("SELECT id, dedup_key FROM forecasts WHERE status='locked'").fetchall()
+        for r in rows:
+            b = board.get(r["dedup_key"])
+            if not b or b.get("missed"):
+                continue
+            k = b["market"]
+            c.execute("UPDATE forecasts SET closing_a=?, closing_draw=?, closing_b=? WHERE id=?",
+                      (k[0], k[1], k[2], r["id"]))
+
+
 def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int:
     """Grade forecasts whose game has an ESPN result. The 1X2 settles once (status locked -> settled):
     actual_outcome comes from the 90+ET goals, so a level knockout grades as a DRAW (penalties are flagged
@@ -911,6 +932,10 @@ def forecast_calibration() -> dict:
         locked = c.execute(
             f"SELECT COUNT(*) FROM forecasts WHERE status='locked' AND {clause}", params
         ).fetchone()[0]
+        crows = c.execute(
+            "SELECT closing_a, closing_draw, closing_b, actual_outcome, brier_market "
+            f"FROM forecasts WHERE status='settled' AND closing_a IS NOT NULL AND {clause}", params
+        ).fetchall()
     n = len(mrows)
     out = {"n": n, "min_n": min_n, "ready": n >= min_n, "locked_pending": locked}
     # the market's own record (always available; for anchor-only sports it IS the ledger)
@@ -924,6 +949,14 @@ def forecast_calibration() -> dict:
             fav_hits += 1 if fav == _OUTCOME_IDX.get(r["actual_outcome"], -1) else 0
         out["market_brier"] = round(sum(r["brier_market"] for r in krows) / kn, 3)
         out["market_hit_rate"] = round(fav_hits / kn * 100, 1)
+    # lock vs close: does the T-75 line lose information to the closing line? (paired, same games)
+    cn = len(crows)
+    out["close_n"] = cn
+    if cn >= min_n:
+        cb = sum(_brier3((r["closing_a"], r["closing_draw"] or 0.0, r["closing_b"]),
+                         _OUTCOME_IDX[r["actual_outcome"]]) for r in crows) / cn
+        out["close_brier"] = round(cb, 3)
+        out["lock_brier_on_closed"] = round(sum(r["brier_market"] for r in crows) / cn, 3)
     if n < min_n:
         return out                            # gate: withhold the model aggregate until the sample is real
     bm = sum(r["brier_model"] for r in mrows) / n

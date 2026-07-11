@@ -75,6 +75,19 @@ function renderAll() {
     const fut = document.querySelector('[data-tab="futures"]');
     if (fut) fut.style.display = caps.includes("futures") ? "" : "none";
   }
+  // the header names the active sport (the app is multi-sport now)
+  if (s.meta && s.meta.sport_name) {
+    const badge = document.getElementById("sport-badge");
+    if (badge && badge.textContent !== s.meta.sport_name) {
+      badge.textContent = s.meta.sport_name;
+      document.title = `Overlay · ${s.meta.sport_name}`;
+    }
+    const hint = document.querySelector("#tab-ledger .hint");
+    if (hint && s.meta.sport === "mlb" && !hint.dataset.mlb) {
+      hint.dataset.mlb = "1";
+      hint.innerHTML = `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`;
+    }
+  }
   renderPicks();
   renderLedger();
   renderResearch();
@@ -226,7 +239,7 @@ function _settledCard(r) {
   const brier = (hasModel && r.brier_model != null && r.brier_market != null)
     ? `<div class="fcard-brier muted" title="model 1X2 Brier vs the market frozen at lock (lower is better)">1X2 Brier ${r.brier_model.toFixed(2)} <span class="${r.brier_model < r.brier_market ? "pos" : "neg"}">vs market ${r.brier_market.toFixed(2)}</span></div>`
     : (r.brier_market != null
-      ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}</div>` : "");
+      ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}${r.closing_a != null ? ` · closed ${Math.round(r.closing_a * 100)}/${Math.round((r.closing_draw || 0) * 100)}/${Math.round(r.closing_b * 100)}` : ""}</div>` : "");
   return `<div class="fcard settled">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b></span><span class="fcard-k"><b>${esc(score)}</b> <span class="muted">${esc((r.commence_time || "").slice(0, 10))}</span></span></div>
     <div class="fcard-leg muted"><span>${esc(teamName(r.team_a))}</span><span>Draw</span><span>${esc(teamName(r.team_b))}</span></div>
@@ -240,9 +253,12 @@ function _ledgerScore(s) {
   if (!s.ready) {
     // anchor-only sports have no model column; the market's own calibration is the scoreboard
     if (s.market_n >= s.min_n && s.market_brier != null) {
+      const closeStat = (s.close_brier != null)
+        ? `<div class="stat"><div class="label">Lock vs close Brier</div><div class="val">${s.lock_brier_on_closed} <span class="muted" style="font-size:13px">vs ${s.close_brier}</span></div></div>` : "";
       return `<div class="summary lg-score">
         <div class="stat"><div class="label">Market Brier</div><div class="val">${s.market_brier}</div></div>
         <div class="stat"><div class="label">Market favorite hit rate</div><div class="val">${s.market_hit_rate}%</div></div>
+        ${closeStat}
         <div class="stat"><div class="label">Graded games</div><div class="val">${s.market_n}</div></div>
       </div>
       <div class="cal-note muted">Anchor-only ledger: the de-vigged market line locks before each game and grades itself. No model rides here by design. ${open}</div>`;

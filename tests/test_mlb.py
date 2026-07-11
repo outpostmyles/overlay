@@ -291,3 +291,24 @@ def test_f5_leg_grades_from_linescores(monkeypatch):
     leg = paper.list_forecasts()[0]["legs"][0]
     assert leg["result"] == "won"
     os.unlink(config.DB_PATH)
+
+
+def test_forecast_close_capture_stops_at_start(monkeypatch):
+    """The ledger's CLV analog: closing_* overwrites each pre-start tick, never after start."""
+    monkeypatch.setattr(config, "SPORT", "mlb")
+    paper = _fresh_paper()
+    key = "fc|2026-07-12|athletics|chicago white sox|14:10"
+    paper.log_forecasts([{"match": "x", "team_a": "athletics", "team_b": "chicago white sox",
+                          "commence_time": "2026-07-12", "stage": None, "dedup_key": key}],
+                        today="2026-07-12")
+    base = {"lock_now": True, "missed": False, "kickoff_iso": "2026-07-12T18:10Z",
+            "model": None, "market": (0.55, 0.0, 0.45), "sources": "kalshi", "legs": []}
+    paper.lock_forecasts({key: base}, "2026-07-12T16:55:00Z")
+    # two pre-start ticks: the later one wins (overwrite-until-start = the close)
+    paper.capture_forecast_close({key: {**base, "market": (0.58, 0.0, 0.42)}})
+    paper.capture_forecast_close({key: {**base, "market": (0.61, 0.0, 0.39)}})
+    r = paper.list_forecasts()[0]
+    assert r["closing_a"] == 0.61 and r["market_a"] == 0.55   # lock frozen, close drifted
+    # after first pitch the board flags missed: the close must stop moving
+    paper.capture_forecast_close({key: {**base, "missed": True, "market": (0.90, 0.0, 0.10)}})
+    assert paper.list_forecasts()[0]["closing_a"] == 0.61

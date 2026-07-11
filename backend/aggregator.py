@@ -1642,6 +1642,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                              f5=_f5_by_game(markets))
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            paper.capture_forecast_close(fboard)   # CLV analog: last pre-start tick = the closing line
             paper.settle_forecasts(results, team_stats)
             rows = paper.list_forecasts()                   # frozen (locked) + graded (settled)
             frozen = {r["dedup_key"] for r in rows}
