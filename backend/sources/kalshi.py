@@ -65,10 +65,53 @@ async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "o
     return out
 
 
+# market types parsed one-market-PER-LINE: each child (e.g. "Over 8.5 runs", "Judge: 2+ HR") is its own
+# 2-way yes/no book. De-vig happens within that pair only; lines of one event are NOT mutually exclusive.
+_PER_LINE_TYPES = ("total", "player_prop")
+
+
+def _per_line_market(m: dict, series: str, mtype: str, group: str) -> Market | None:
+    """One Kalshi child (a single line) -> a 2-way Market (over/yes vs under/no)."""
+    tkr = m.get("ticker") or ""
+    ask = _prob(m.get("yes_ask_dollars"))
+    bid = _prob(m.get("yes_bid_dollars"))
+    last = _prob(m.get("last_price_dollars"))
+    over = ask or last
+    if not over or not tkr:
+        return None                              # no executable price / no liquidity
+    mid_over = (bid + ask) / 2.0 if (bid and ask) else (last or over)
+    under = (1.0 - bid) if bid else (1.0 - mid_over)   # the no side's executable ask
+    label = _clean(m.get("yes_sub_title") or m.get("title") or "").strip()
+    line = m.get("floor_strike")
+
+    def q(prob, mid):
+        return Quote(source="kalshi", source_type="prediction_market", price_decimal=1.0 / prob,
+                     implied_prob=prob, mid_prob=mid, fee=config.KALSHI_FEE_COEF,
+                     volume=m.get("volume_fp"), link=f"https://kalshi.com/markets/{series.lower()}")
+
+    return Market(
+        market_id=f"kalshi:{tkr}",
+        event=_clean(m.get("title") or "").rstrip("?").strip(),
+        market_type=mtype,
+        selections=[
+            Selection(key=f"over_{line}", label=label, quotes=[q(over, mid_over)]),
+            Selection(key=f"under_{line}", label=f"Under ({label})", quotes=[q(under, 1.0 - mid_over)]),
+        ],
+        commence_time=kalshi_ticker_date(m.get("event_ticker") or tkr.rsplit("-", 1)[0]),
+        group=group,
+    )
+
+
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
     for series, (mtype, group) in active().kalshi_series.items():
         raw = await _fetch_series(client, series)
+        if mtype in _PER_LINE_TYPES:
+            for m in raw:
+                built = _per_line_market(m, series, mtype, group)
+                if built:
+                    markets.append(built)
+            continue
         # group the per-outcome markets by their parent event
         events: dict[str, list[dict]] = {}
         for m in raw:

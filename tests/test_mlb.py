@@ -22,7 +22,10 @@ def test_mlb_adapter_registered():
     a = sports.get("mlb")
     assert a.outcomes == ("a", "b")
     assert a.espn_path == "baseball/mlb"
-    assert a.kalshi_series == {"KXMLBGAME": ("moneyline", "Matches")}
+    assert a.kalshi_series["KXMLBGAME"] == ("moneyline", "Matches")
+    assert a.kalshi_series["KXMLBTOTAL"] == ("total", "Lines")
+    assert a.kalshi_series["KXMLBHIT"] == ("player_prop", "hits")
+    assert a.kalshi_series["KXMLBOUTS"] == ("player_prop", "outs recorded")
     assert a.capabilities == frozenset()          # anchor-only by design
     assert a.pair_only_key is False
     assert a.results_window_days == 10

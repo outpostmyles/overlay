@@ -534,8 +534,22 @@ function renderResearch() {
     intro = `<div class="banner warn">${ico("analyze")}<span><b>No analysis yet.</b> Tap <b>Analyze</b> (top-right) for reasoned verdicts on today's favorites — a few cents, cached for the day.</span></div>`;
   }
   const cards = aiCount ? `<h2 class="ai-h">${ico("analyze")} AI slate analysis</h2>` + aiCardsHTML(ai) : "";
-  $("#research-body").innerHTML = intro + cards + cornersHTML(p.corners) + browseHTML(p);
+  $("#research-body").innerHTML = intro + cards + cornersHTML(p.corners) + kalshiPropsHTML(p.kalshi_props) + browseHTML(p);
 }
+
+// de-vigged Kalshi player props (free): the sharp fair probability on each line, research-only
+function kalshiPropsHTML(rows) {
+  if (!rows || !rows.length) return "";
+  const tr = (r) => `<tr>
+    <td><b>${esc(r.player)}</b><div class="muted tiny">${esc(r.event || "")}</div></td>
+    <td>${esc(r.stat)} <b>${r.line != null ? Math.ceil(r.line) : ""}+</b></td>
+    <td class="num">${Math.round(r.over_fair * 100)}%</td>
+    <td class="muted">${r.days_out != null ? dateLabel(r.days_out) : ""}</td></tr>`;
+  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· de-vigged Kalshi fair probability per line (free, no key); research reads, auto-grading coming</span></h3>
+    <table><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th>When</th></tr></thead>
+    <tbody>${rows.slice(0, 40).map(tr).join("")}</tbody></table></div>`;
+}
+
 
 function cornersHTML(rows) {
   if (!rows || !rows.length) return "";

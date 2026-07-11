@@ -67,6 +67,12 @@ MLB = register(SportAdapter(
     espn_path="baseball/mlb",
     kalshi_series={
         "KXMLBGAME": ("moneyline", "Matches"),
+        # per-LINE 2-way markets (over/under de-vigged within each line, never across lines)
+        "KXMLBTOTAL": ("total", "Lines"),
+        # player props, also per-line yes/no; the group slot carries the stat label
+        "KXMLBHIT": ("player_prop", "hits"),
+        "KXMLBHR": ("player_prop", "home runs"),
+        "KXMLBOUTS": ("player_prop", "outs recorded"),
     },
     kalshi_resolved_series="KXMLBGAME",
     kalshi_strip_reg_time=False,

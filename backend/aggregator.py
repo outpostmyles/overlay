@@ -303,6 +303,57 @@ async def _noop(value):
     return value
 
 
+_TOTAL_TITLE_RE = re.compile(r"^(.+?) vs (.+?) total runs", re.IGNORECASE)
+
+
+def _totals_by_game(markets: list) -> dict:
+    """{(team_pair, commence[:16]): [(line, fair_over)]} from per-line total markets. Keyed by pair +
+    start time (both sides derive from the same Kalshi ticker) so a doubleheader's two games keep
+    their own lines; _merge rewrites market ids, so the ticker token cannot be the join key."""
+    out: dict = {}
+    for m in markets:
+        if m.market_type != "total":
+            continue
+        tm = _TOTAL_TITLE_RE.match(m.event or "")
+        over = next((s for s in m.selections if s.key.startswith("over_")), None)
+        if not tm or over is None or over.fair_prob is None:
+            continue
+        pair = frozenset((normalize_team(tm.group(1)), normalize_team(tm.group(2))))
+        try:
+            line = float(over.key.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        out.setdefault((pair, (m.commence_time or "")[:16]), []).append((line, over.fair_prob))
+    return out
+
+
+def _kalshi_props_board(markets: list) -> list[dict]:
+    """De-vigged player-prop rows from Kalshi ({player, stat, line, fair over%, event, date}). The stat
+    label rides in Market.group. Display + research only in Phase 1; auto-grading lands with the ESPN
+    player-line extraction."""
+    rows: list[dict] = []
+    for m in markets:
+        if m.market_type != "player_prop":
+            continue
+        over = next((s for s in m.selections if s.key.startswith("over_")), None)
+        if over is None or over.fair_prob is None:
+            continue
+        label = over.label or ""
+        player = label.split(":")[0].strip() if ":" in label else label
+        try:
+            line = float(over.key.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        rows.append({"player": player, "stat": m.group, "line": line,
+                     "over_fair": round(over.fair_prob, 4),
+                     "event": m.event, "commence_time": m.commence_time,
+                     "days_out": picks._days_out((m.commence_time or "")[:10])})
+    # closest-to-coinflip first: a 99% "1+ hits" line is trivially true and worthless as research
+    rows.sort(key=lambda r: (r.get("days_out") if r.get("days_out") is not None else 99,
+                             abs(r["over_fair"] - 0.5)))
+    return rows
+
+
 def _parse_iso(s: str | None) -> datetime | None:
     if not s:
         return None
@@ -405,7 +456,8 @@ def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
 
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
-                    now: datetime, corner_rates=None, poss=None, perf=None) -> tuple[list[dict], dict]:
+                    now: datetime, corner_rates=None, poss=None, perf=None,
+                    totals=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -479,12 +531,21 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
                           "commence_time": gdate, "stage": None, "dedup_key": dedup})
         sources = ",".join(sorted({q.source for s in m.selections for q in s.quotes
                                    if q.source in config.SHARP_SOURCES}))
+        legs = _predict_legs(model, corner_rates, a, b, poss, perf)
+        # market-anchored total leg (Kalshi per-line totals): the MAIN line (fair closest to a coin
+        # flip) locks alongside the 1X2 and grades free off the final score, model or no model
+        game_lines = (totals or {}).get((frozenset((a, b)), (m.commence_time or "")[:16]))
+        if game_lines:
+            line, fair_over = min(game_lines, key=lambda x: abs(x[1] - 0.5))
+            legs.append({"key": "total_goals", "side": "over" if fair_over >= 0.5 else "under",
+                         "line": line, "team": None,
+                         "prob": round(max(fair_over, 1 - fair_over), 3), "proj": None})
         board[dedup] = {
             "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
             "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
             "sources": sources,
-            "legs": _predict_legs(model, corner_rates, a, b, poss, perf),
+            "legs": legs,
         }
     return cands, board
 
@@ -1450,10 +1511,11 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # are no standalone +EV / Best Lines / Arbitrage tabs anymore. Futures are never surfaced.
     best = []
     for m in markets:
-        if m.market_type != "moneyline":
+        if m.market_type not in ("moneyline", "total", "player_prop", "f5_moneyline"):
             continue
         edges.consensus_fair_line(m, config.SHARP_SOURCES, config.DEVIG_METHOD)
-        best.extend(edges.best_lines(m, min_fair_prob=config.MIN_FAIR_PROB))
+        if m.market_type == "moneyline":
+            best.extend(edges.best_lines(m, min_fair_prob=config.MIN_FAIR_PROB))
 
     # smart money — now match-level: whale backing on the actual games on the slate, not the
     # tournament-winner market. Derive the matchups (favorites scoped to the horizon) first.
@@ -1465,6 +1527,9 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     else:
         smart, lineups = {}, {}
     picks_board = picks.generate(markets, props, model, config, smart)
+    # de-vigged Kalshi player props (free, no key): display + research rows; grading lands with the
+    # ESPN player-line extraction. Empty for sports whose adapter lists no player_prop series.
+    picks_board["kalshi_props"] = _kalshi_props_board(markets)
 
     # Finished games (goals + free ESPN box stats: possession, corners, shots, SOT). Fetched here so the
     # corners model and the prediction sheet can use measured territory/volume. Cached, reused below.
@@ -1516,7 +1581,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             fkicks = await get_kickoffs(fdates)
             fcands, fboard = _forecast_board(markets, model, fkicks,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
-                                             corner_rates, poss_shares, perf_mult)
+                                             corner_rates, poss_shares, perf_mult,
+                                             totals=_totals_by_game(markets))
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)
