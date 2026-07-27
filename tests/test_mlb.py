@@ -312,3 +312,34 @@ def test_forecast_close_capture_stops_at_start(monkeypatch):
     # after first pitch the board flags missed: the close must stop moving
     paper.capture_forecast_close({key: {**base, "missed": True, "market": (0.90, 0.0, 0.10)}})
     assert paper.list_forecasts()[0]["closing_a"] == 0.61
+
+
+def test_likely_postponed_flag_marks_rainouts_without_voiding(monkeypatch):
+    """A locked row whose pair later played a SETTLED game is labelled, not voided: the status must
+    survive so a suspended game's late final can still grade."""
+    monkeypatch.setattr(config, "SPORT", "mlb")
+    paper = _fresh_paper()
+
+    def add(a, b, when, status, sport="mlb"):
+        with paper._conn() as c:
+            return c.execute(
+                "INSERT INTO forecasts (match, team_a, team_b, commence_time, status, sport, "
+                "logged_at, market_a, market_b) VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"{a} v {b}", a, b, when, status, sport, "2026-07-20T00:00:00Z", 0.5, 0.5)).lastrowid
+
+    rained = add("baltimore orioles", "boston red sox", "2026-07-21", "locked")
+    add("baltimore orioles", "boston red sox", "2026-07-22", "settled")     # the makeup, settled
+    alone = add("chicago cubs", "detroit tigers", "2026-07-21", "locked")   # no later game: not flagged
+    add("chicago white sox", "texas rangers", "2026-07-21", "locked")
+    add("chicago white sox", "texas rangers", "2026-07-22", "void")         # void is NOT evidence
+
+    rows = {r["id"]: r for r in paper.list_forecasts()}
+    assert rows[rained]["likely_postponed"] is True
+    assert rows[alone]["likely_postponed"] is False
+    # a later VOID row proves nothing was played, so it must not flag the earlier row
+    assert not any(r["likely_postponed"] for i, r in rows.items()
+                   if r["team_a"] == "chicago white sox")
+    # the flag is display-only: every status is untouched, so a late final can still settle
+    with paper._conn() as c:
+        got = [r["status"] for r in c.execute("SELECT status FROM forecasts WHERE status='locked'")]
+    assert len(got) == 3

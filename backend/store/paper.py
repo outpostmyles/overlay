@@ -902,6 +902,21 @@ def list_forecasts() -> list[dict]:
             f"SELECT * FROM forecasts WHERE status IN ('locked','settled') AND {clause} "
             "ORDER BY status='locked' DESC, commence_time DESC, id DESC", params
         ).fetchall()
+        # A locked row whose pair has since played a LATER game that already settled was almost certainly
+        # rained out: its own final is never arriving, and the same-date settlement pool means a makeup
+        # can never grade it. Label it so the board stops promising a result, but leave the status alone.
+        # Voiding here would be irreversible and would run before settle_forecasts, destroying the rare
+        # suspended game whose final does legitimately land later; the sport-derived long-stop in
+        # lock_forecasts stays the only locked -> void path.
+        postponed = {
+            r["id"] for r in c.execute(
+                f"SELECT f.id FROM forecasts f WHERE f.status='locked' AND {_sport_clause('f.')[0]} "
+                "AND EXISTS (SELECT 1 FROM forecasts f2 WHERE f2.team_a = f.team_a "
+                "AND f2.team_b = f.team_b AND f2.status='settled' "
+                f"AND f2.commence_time > f.commence_time AND {_sport_clause('f2.')[0]})",
+                (*_sport_clause()[1], *_sport_clause()[1]),
+            ).fetchall()
+        }
     out = []
     for r in rows:
         d = dict(r)
@@ -909,6 +924,7 @@ def list_forecasts() -> list[dict]:
             d["legs"] = json.loads(r["legs_json"]) if r["legs_json"] else []
         except (TypeError, ValueError):
             d["legs"] = []
+        d["likely_postponed"] = r["id"] in postponed
         out.append(d)
     return out
 
