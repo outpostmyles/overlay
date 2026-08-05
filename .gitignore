@@ -6,6 +6,10 @@
 poly.db
 poly_*.json
 backend/model/results_cache.csv
+# any sqlite ledger, wherever it lands: one `git add -A` would otherwise commit a binary DB
+*.db
+*.db-journal
+*.db-wal
 
 # python
 .venv/
