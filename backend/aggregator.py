@@ -244,10 +244,19 @@ async def get_kickoffs(dates: list[str]) -> dict:
     if need and (stale or not need.issubset(_kickoff_cache["dates"])):
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
         if stale:
-            # keep only strictly-past entries (finished games never change); drop today/future so they refresh
-            _kickoff_cache["map"] = {k: v for k, v in _kickoff_cache["map"].items()
-                                     if v and v[:10].replace("-", "") < today}
-            _kickoff_cache["dates"] = {d for d in _kickoff_cache["dates"] if d < today}
+            # Keep only entries filed under a strictly-past SCOREBOARD date (finished games never
+            # change); drop today/future so they refresh. Both halves of the cache prune on the SAME
+            # yardstick — the date we queried ESPN for — never on the entry's own UTC value. A 20:00-ET
+            # or later first pitch carries the NEXT UTC date, so judging entries by their value evicted
+            # tonight's late games at UTC midnight while their date stayed marked "already fetched":
+            # the kickoff was then never re-asked for, `ko` was None for the whole lock window, and
+            # every 21:15-ET-or-later game was silently voided instead of locked.
+            keep = {d for d in _kickoff_cache["dates"] if d < today}
+            surv = {k: v for k, v in _kickoff_cache["map"].items()
+                    if v and isinstance(k, tuple) and len(k) == 2
+                    and str(k[1]).replace("-", "") in keep}
+            surv.update({k[0]: v for k, v in list(surv.items())})   # rebuild the pair-only aliases
+            _kickoff_cache["map"], _kickoff_cache["dates"] = surv, keep
             _kickoff_cache["ts"] = now
         missing = sorted(need - _kickoff_cache["dates"])   # past dates fetch once ever; current always refetch
         if missing:
@@ -258,7 +267,10 @@ async def get_kickoffs(dates: list[str]) -> dict:
                     print(f"[aggregator] kickoffs errored: {exc}")
                     fresh = {}
             _kickoff_cache["map"].update(fresh)
-            covered = {iso[:10].replace("-", "") for iso in fresh.values() if iso}
+            # a date counts as done by the date we QUERIED, not by the events' UTC dates: a West-Coast-only
+            # slate carries nothing but next-UTC-day kickoffs and would never be marked covered at all
+            covered = {str(k[1]).replace("-", "") for k, v in fresh.items()
+                       if v and isinstance(k, tuple) and len(k) == 2}
             _kickoff_cache["dates"] |= (need & covered)   # only mark a date done once ESPN actually returned it
     return _kickoff_cache["map"]
 
