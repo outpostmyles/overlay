@@ -47,7 +47,7 @@ Nothing here is a profit claim, and the ledger explicitly must not be used to re
 
 ## Stack and scale
 
-Python / FastAPI / httpx (async), NumPy + SciPy, SQLite, vanilla-JS SPA (no build step). About 12,600 lines of source across backend, tests, and frontend (roughly 9,300 excluding blanks and comments; 79 tracked files), **198 tests, all passing** (odds math, settlement edge cases, the golden harness, sport adapters, kickoff-cache date boundaries, closing-line cutoffs, real Kalshi payloads in each wording it has used, and football box-score grading and spreads), 52 commits. Deployed on a single DigitalOcean droplet: nginx + five systemd services, per-sport caches, sport-scoped ledger in one database, running keys-blank at $0 API spend.
+Python / FastAPI / httpx (async), NumPy + SciPy, SQLite, vanilla-JS SPA (no build step). About 12,600 lines of source across backend, tests, and frontend (roughly 9,300 excluding blanks and comments; 79 tracked files), **198 tests, all passing** (odds math, settlement edge cases, the golden harness, sport adapters, kickoff-cache date boundaries, closing-line cutoffs, real Kalshi payloads in each wording it has used, and football box-score grading and spreads), 53 commits. Deployed on a single DigitalOcean droplet: nginx + five systemd services, per-sport caches, sport-scoped ledger in one database, running keys-blank at $0 API spend.
 
 *Screenshots worth adding here: the Model Ledger's pre-game prediction cards and a graded recap card (predicted vs actual with per-line ✓/✗), and the WC bracket view.*
 
