@@ -28,6 +28,7 @@ def _trim(g: dict, sport: str) -> dict:
                 if f.get("key") == "top_traders" and (f.get("target") or {}).get("team")), None)
     return {"sport": sport, "dedup": g["dedup"], "team_a": g["team_a"], "team_b": g["team_b"],
             "date": g.get("date"), "kickoff_iso": g.get("kickoff_iso"), "market": g.get("market"),
+            "kalshi_ask": g.get("kalshi_ask"),
             "legs": [{k: leg.get(k) for k in ("key", "team", "opp", "line", "side", "prob", "research_prob")}
                      for leg in g.get("legs") or [] if leg.get("key") in ("spread", "total_goals")],
             "research": {"ml": rs.get("ml"), "uncertain": rs.get("uncertain") or [],

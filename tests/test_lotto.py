@@ -2,6 +2,7 @@
 the research legs are marked, every running board feeds it, and a cross-sport ticket can be logged."""
 import importlib
 import json
+import math
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -110,27 +111,48 @@ def test_a_cross_sport_ticket_logs_as_multi_and_shows_on_every_board(monkeypatch
 
 
 # --- payout-target tickets ------------------------------------------------------------------------- #
+def _priced(i, p, cost=0.06, flags=(), dedup=None):
+    """A leg DraftKings prices at `cost` margin per unit of payout (about what its favorites carry)."""
+    from backend.engine.odds_math import decimal_to_american
+    dk = decimal_to_american((1 / p) ** (1 / (1 + cost)))
+    return {"sport": "cfb", "dedup": dedup or f"g{i}", "kind": "ml", "team": f"t{i}", "p": p, "label": f"T{i} ML",
+            "game": f"T{i} v X", "kickoff_iso": f"2026-10-10T{10 + i % 10:02d}:00Z", "flags": list(flags),
+            "dk": dk, "cost": lotto.leg_cost(p, dk)}
+
+
 def _pool(ps, flags=None):
-    return [{"sport": "cfb", "dedup": f"g{i}", "kind": "ml", "team": f"t{i}", "p": p, "label": f"T{i} ML",
-             "game": f"T{i} v X", "kickoff_iso": f"2026-10-10T{10 + i % 10:02d}:00Z", "flags": (flags or {}).get(i, []),
-             "dk": -150} for i, p in enumerate(ps)]
+    return [_priced(i, p, flags=(flags or {}).get(i, [])) for i, p in enumerate(ps)]
 
 
-def test_a_ticket_reaches_its_payout_with_the_most_likely_legs_it_can():
+def test_a_ticket_reaches_its_payout_at_the_book_with_the_most_likely_legs_it_can():
     ps = [0.99, 0.98, 0.95, 0.9, 0.88, 0.86, 0.85, 0.83, 0.82, 0.8, 0.8, 0.79, 0.78, 0.77, 0.76, 0.76, 0.75,
           0.74, 0.72, 0.71, 0.7, 0.69, 0.68, 0.67, 0.66, 0.65, 0.64, 0.63, 0.62, 0.61, 0.6, 0.6]
-    t = lotto.build_ticket(_pool(ps), 2, 1000)
-    assert t["reached"] and len(t["legs"]) == 20 and t["fair_payout"] >= 1000
+    pool = _pool(ps)
+    t = lotto.build_ticket(pool, 2, 1000)
+    assert t["reached"] and len(t["legs"]) == 20 and t["dk_payout"] >= 1000
+    assert t["fair_payout"] > t["dk_payout"]                                # the book's cut compounds
+    assert t["dk_priced"] == 20 and t["dk_price"] > 40000                   # one price for the whole ticket
     assert min(l["p"] for l in t["legs"]) >= 0.6 and len({l["dedup"] for l in t["legs"]}) == 20
     # the window slid only as far as the target needed: one step safer (the favorite just above it in,
-    # its riskiest leg out) would no longer pay $1,000
+    # its riskiest leg out) would no longer pay $1,000 at the book
+    dec = {l["dedup"]: lotto.book_decimal(l, 0) for l in pool}
     window = sorted(t["legs"], key=lambda l: -l["p"])
     top_i = ps.index(window[0]["p"])
-    assert top_i > 0 and 2 / (t["p"] / window[-1]["p"] * ps[top_i - 1]) < 1000
+    assert top_i > 0 and t["dk_payout"] / dec[window[-1]["dedup"]] * dec[pool[top_i - 1]["dedup"]] < 1000
     assert [l["kickoff_iso"] for l in t["legs"]] == sorted(l["kickoff_iso"] for l in t["legs"])
-    assert t["dk_payout"] is not None                                     # every leg priced at DraftKings
-    big = lotto.build_ticket(_pool(ps), 2, 50000)
+    big = lotto.build_ticket(pool, 2, 50000)
     assert not big["reached"] and len(big["legs"]) == 20                   # the biggest sensible ticket instead
+
+
+def test_a_leg_without_a_book_price_is_estimated_at_the_weekends_typical_margin():
+    pool = _pool([0.8, 0.75, 0.7])
+    assert abs(lotto.typical_cost(pool) - 0.06) < 0.01
+    bare = {**pool[0], "dedup": "bare", "dk": None, "cost": None}
+    d = lotto.book_decimal(bare, 0.06)
+    assert 1 / 0.8 > d > 1 and abs(-math.log(0.8) / math.log(d) - 1.06) < 1e-9
+    t = lotto.build_ticket([bare] + pool[1:], 1, 1000)
+    assert t["dk_priced"] == 2 and t["dk_price"] is None                   # no single price until all are priced
+    assert lotto.typical_cost([]) == lotto.TYPICAL_COST
 
 
 def test_the_research_construction_opens_with_the_flagged_legs():
@@ -184,3 +206,53 @@ def test_weekend_tickets_freeze_once_and_grade_every_leg(monkeypatch):
     lottotrack.settle()
     st = lottotrack.study()
     assert {r["key"]: r for r in st["legs"]}["all:all"]["n"] == 3 and st["tickets"] == 2
+
+
+# --- underdogs and the efficient construction ------------------------------------------------------ #
+def test_only_moderate_underdogs_with_a_real_price_reach_the_pool():
+    boards = {"nfl": {"ts": time.time(), "names": {}, "games": [
+        # a 42% dog DraftKings pays +160 on (fair about +138): value
+        _game("d1", "chicago bears", "green bay packers", 0.58,
+              dk={"book": "DraftKings", "ml": {"green bay packers": 160}, "ev": {"green bay packers": 0.092}}),
+        # a 42% dog with no price anywhere: left out
+        _game("d2", "buffalo bills", "new york jets", 0.58),
+        # a 30% dog is a long shot, even at a good price: left out
+        _game("d3", "dallas cowboys", "tampa bay buccaneers", 0.70,
+              dk={"book": "DraftKings", "ml": {"tampa bay buccaneers": 300}, "ev": {"tampa bay buccaneers": 0.2}}),
+        # a 40% dog at +140 (a hair under fair): in, priced, but no value flag
+        _game("d5", "houston texans", "indianapolis colts", 0.60,
+              dk={"book": "DraftKings", "ml": {"indianapolis colts": 140}, "ev": {"indianapolis colts": -0.04}}),
+    ]}}
+    # a 45% dog on Kalshi at a 40c ask (about 41.7c after the fee): value on the exchange
+    k = _game("d4", "seattle seahawks", "los angeles rams", 0.55)
+    k["kalshi_ask"] = {"los angeles rams": 0.40}
+    boards["nfl"]["games"].append(k)
+    legs = lotto.candidates(boards, now=NOW)
+    dogs = {l["dedup"]: l for l in legs if "dog" in l["flags"]}
+    assert set(dogs) == {"d1", "d4", "d5"}
+    assert dogs["d1"]["edge"]["venue"] == "DraftKings" and dogs["d1"]["flags"][:2] == ["dog", "value"]
+    assert dogs["d1"]["cost"] < 0 < dogs["d5"]["cost"]                     # value costs less than nothing
+    assert dogs["d4"]["edge"]["venue"] == "Kalshi" and dogs["d4"]["edge"]["ev"] > 0.07
+    assert dogs["d5"]["flags"] == ["dog"] and dogs["d5"]["edge"] is None
+    assert not any(l["dedup"] == "d3" and "dog" in l["flags"] for l in legs)
+    for v in ("favorites", "research"):                                    # only the efficient tickets take dogs
+        assert lotto.build_ticket(legs, 5, 1000, v)["dogs"] == 0
+
+
+def test_the_efficient_construction_loses_the_least_to_the_book():
+    heavy = [_priced(i, p, cost=0.15) for i, p in enumerate((0.9, 0.88, 0.86, 0.85, 0.84, 0.83, 0.82, 0.81, 0.8))]
+    middle = [_priced(20 + i, p, cost=0.05) for i, p in enumerate((0.75, 0.72, 0.7, 0.68, 0.66, 0.64, 0.62, 0.6) * 2)]
+    dogs = [_priced(40 + i, p, cost=0.03, flags=["dog"]) for i, p in enumerate((0.45, 0.42, 0.40))]
+    value_dog = _priced(50, 0.44, cost=-0.05, flags=["dog", "value"])
+    unpriced = {**_priced(60, 0.97), "dk": None, "cost": None}
+    pool = sorted(heavy + middle + dogs + [value_dog, unpriced], key=lambda l: -l["p"])
+    eff = lotto.build_ticket(pool, 5, 1000, "efficient")
+    fav = lotto.build_ticket(pool, 5, 1000, "favorites")
+    assert eff["reached"] and fav["reached"] and eff["dk_payout"] >= 1000 and fav["dk_payout"] >= 1000
+    assert eff["dogs"] == 2 and "g50" in {l["dedup"] for l in eff["legs"]}  # the value dog first, never three
+    assert eff["dk_priced"] == len(eff["legs"]) and eff["dk_price"]         # every leg priced at DraftKings
+    assert eff["p"] > fav["p"] * 1.15                                        # same payout, a likelier ticket
+    assert len(eff["legs"]) < len(fav["legs"])
+    assert eff["dk_payout"] < 1100 and fav["dk_payout"] < 1100             # tightened: little payout wasted
+    # a heavy favorite only to top off the payout: they cost the most per unit of it
+    assert len({l["dedup"] for l in eff["legs"]} & {l["dedup"] for l in heavy}) <= 1

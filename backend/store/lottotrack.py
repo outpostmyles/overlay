@@ -1,8 +1,9 @@
 """The lotto record: every weekend's tickets, frozen and graded whether or not they were bet.
 
-Each weekend, Saturday at 15:00 UTC, the $2 tickets for every target ($1,000, $2,500, $5,000) and both
-constructions ("favorites", "research") are frozen with every leg's probability at that moment, and each
-leg then grades off the same finals as the forecast ledger (any sport: the legs reference forecast rows).
+Each weekend, Saturday at 15:00 UTC, the $5 tickets for every target ($1,000, $2,500, $5,000) and every
+construction ("efficient", "favorites", "research") are frozen with every leg's probability and DraftKings
+price at that moment, and each leg then grades off the same finals as the forecast ledger (any sport: the
+legs reference forecast rows).
 A ticket hits when every leg that played won; a postponed game voids its leg, the way a book drops it.
 Grading continues after a ticket misses, so the record keeps every leg: that is the data that says which
 legs belong on a ticket (a sport, a price band, a research flag) and which construction holds up.
@@ -22,14 +23,14 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS lotto_tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     weekend TEXT NOT NULL,             -- the weekend's end (the Tuesday after), e.g. 2026-10-13
-    variant TEXT NOT NULL,             -- favorites | research
+    variant TEXT NOT NULL,             -- efficient | favorites | research
     stake REAL NOT NULL,
     target REAL NOT NULL,
     frozen_at TEXT NOT NULL,
     legs_json TEXT NOT NULL,           -- [{sport, dedup, kind, team|dir, line, p, flags, label, game, kickoff_iso, result}]
     p REAL NOT NULL,                   -- chance every leg wins, at the freeze
     fair_payout REAL,
-    dk_payout REAL,
+    dk_payout REAL,                    -- at DraftKings' prices (a leg without one at the weekend's typical margin)
     reached INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'open',   -- open | hit | missed
     legs_won INTEGER DEFAULT 0, legs_lost INTEGER DEFAULT 0, legs_void INTEGER DEFAULT 0,
@@ -53,7 +54,8 @@ def init() -> None:
 def freeze(weekend: str, tickets: list[dict], now_iso: str | None = None) -> int:
     """Store a weekend's tickets once. Returns how many were new."""
     now_iso = now_iso or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    keep = ("sport", "dedup", "kind", "team", "dir", "line", "p", "flags", "label", "game", "kickoff_iso", "dk")
+    keep = ("sport", "dedup", "kind", "team", "dir", "line", "p", "flags", "label", "game", "kickoff_iso", "dk",
+            "cost", "edge")
     added = 0
     with _conn() as c:
         for t in tickets:
@@ -131,17 +133,18 @@ def list_tickets(weekends: int = 8) -> list[dict]:
 
 
 def _band(p: float) -> str:
-    for lo, label in ((0.90, "90%+"), (0.80, "80-90%"), (0.70, "70-80%"), (0.60, "60-70%")):
+    for lo, label in ((0.90, "90%+"), (0.80, "80-90%"), (0.70, "70-80%"), (0.60, "60-70%"), (0.50, "50-60%"),
+                      (0.35, "35-50%")):
         if p >= lo:
             return label
-    return "under 60%"
+    return "under 35%"
 
 
 def study() -> dict:
     """What the tickets are teaching: tickets hit against the chance they had, every graded leg against
     its price (overall, by sport, by price band, by research flag, by construction), and the closest calls.
     The leg rows are the ones to act on: a group that keeps winning less often than priced does not belong
-    on a ticket. The six tickets of a weekend share most of their legs, so a leg counts once per weekend
+    on a ticket. The nine tickets of a weekend share many of their legs, so a leg counts once per weekend
     (and once per construction in the construction rows); counting it per ticket would overstate the
     evidence."""
     with _conn() as c:
@@ -196,7 +199,7 @@ def study() -> dict:
 
 def maybe_freeze(pool_tickets: list[dict], weekend_end: datetime, freeze_at: datetime,
                  now: datetime | None = None) -> int:
-    """Freeze this weekend's $2 tickets once the freeze time has passed (and the weekend is not over)."""
+    """Freeze this weekend's $5 tickets once the freeze time has passed (and the weekend is not over)."""
     now = now or datetime.now(timezone.utc)
     if not freeze_at <= now < weekend_end:
         return 0
