@@ -32,7 +32,7 @@ def _freeze(monkeypatch, iso: str, mono: float, calls: list):
 
 
 def test_late_kickoff_survives_utc_midnight(monkeypatch):
-    aggregator._kickoff_cache.update(map={}, ts=0.0, dates=set())
+    monkeypatch.setattr(aggregator, "_kickoff_cache", {"map": {}, "ts": 0.0, "dates": set()})
     calls: list = []
 
     # 23:00Z on 7/21: both games cached, keyed on the date we queried
@@ -42,7 +42,7 @@ def test_late_kickoff_survives_utc_midnight(monkeypatch):
     assert aggregator._kickoff_cache["dates"] == {"20260721"}
 
     # 00:30Z on 7/22, past the TTL: the prune runs with today=20260722. The late game's own UTC date is
-    # now 20260722, but its scoreboard date is still strictly past, so it must NOT be evicted — its lock
+    # now 20260722, but its scoreboard date is still strictly past, so it must NOT be evicted: its lock
     # window (kickoff - 75min) does not even open until 00:25Z.
     _freeze(monkeypatch, "2026-07-22T00:30:00+00:00",
             1_000.0 + aggregator.config.RESULTS_CACHE_TTL + 1, calls)
@@ -55,7 +55,7 @@ def test_late_kickoff_survives_utc_midnight(monkeypatch):
 def test_all_late_slate_marks_its_queried_date_covered(monkeypatch):
     """`covered` is built from the queried dates: a West-Coast-only slate carries nothing but next-day
     UTC kickoffs, and must still count as fetched instead of being re-requested every refresh."""
-    aggregator._kickoff_cache.update(map={}, ts=0.0, dates=set())
+    monkeypatch.setattr(aggregator, "_kickoff_cache", {"map": {}, "ts": 0.0, "dates": set()})
     calls: list = []
     _freeze(monkeypatch, "2026-07-21T23:00:00+00:00", 2_000.0, calls)
     monkeypatch.setattr(aggregator.espn, "fetch_kickoffs",

@@ -246,7 +246,7 @@ async def get_kickoffs(dates: list[str]) -> dict:
         if stale:
             # Keep only entries filed under a strictly-past SCOREBOARD date (finished games never
             # change); drop today/future so they refresh. Both halves of the cache prune on the SAME
-            # yardstick — the date we queried ESPN for — never on the entry's own UTC value. A 20:00-ET
+            # yardstick (the date we queried ESPN for), never on the entry's own UTC value. A 20:00-ET
             # or later first pitch carries the NEXT UTC date, so judging entries by their value evicted
             # tonight's late games at UTC midnight while their date stayed marked "already fetched":
             # the kickoff was then never re-asked for, `ko` was None for the whole lock window, and
