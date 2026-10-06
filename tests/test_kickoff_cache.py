@@ -67,6 +67,28 @@ def test_all_late_slate_marks_its_queried_date_covered(monkeypatch):
     assert calls == [["20260721"]]            # already covered → no second scoreboard call
 
 
+def test_placeholder_marker_survives_the_prune_with_its_start(monkeypatch):
+    """A kept past-date start must keep its timeValid-false marker, or the 04:00Z placeholder would turn
+    into a real kickoff after UTC midnight and the game would void as missed before it was played."""
+    monkeypatch.setattr(aggregator, "_kickoff_cache", {"map": {}, "ts": 0.0, "dates": set()})
+    pair = frozenset({"ucla", "wisconsin"})
+    tbd = aggregator.espn.tbd_key(pair, "2026-10-17")
+    calls: list = []
+
+    async def fake_fetch(client, dates):
+        calls.append(sorted(dates))
+        return {pair: "2026-10-17T04:00Z", (pair, "2026-10-17"): "2026-10-17T04:00Z", tbd: True}
+
+    _freeze(monkeypatch, "2026-10-17T20:00:00+00:00", 3_000.0, calls)
+    monkeypatch.setattr(aggregator.espn, "fetch_kickoffs", fake_fetch)
+    assert asyncio.run(aggregator.get_kickoffs(["20261017"]))[tbd] is True
+    _freeze(monkeypatch, "2026-10-18T00:30:00+00:00", 3_000.0 + aggregator.config.RESULTS_CACHE_TTL + 1, calls)
+    monkeypatch.setattr(aggregator.espn, "fetch_kickoffs", fake_fetch)
+    kicks = asyncio.run(aggregator.get_kickoffs(["20261017"]))
+    assert kicks[tbd] is True and kicks[pair] == "2026-10-17T04:00Z"   # the alias is a start, not the flag
+    assert calls == [["20261017"]]
+
+
 async def _only_late(dates, calls):
     calls.append(sorted(dates))
     return {LATE: "2026-07-22T01:40Z", (LATE, "2026-07-21"): "2026-07-22T01:40Z"}

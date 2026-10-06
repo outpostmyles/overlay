@@ -93,7 +93,10 @@ function renderAll() {
   setPill("pill-books", m.sources_live.sportsbooks || dkLive);
   $("#pill-books").textContent = m.sources_live.sportsbooks ? "Sportsbooks" : "DraftKings";
   setPill("pill-model", m.model_loaded);
-  $("#pill-model").style.display = m.model_loaded ? "" : "none";
+  // a pill names a feed this board reads: an archive reads none live, and an unused source is left off
+  // (Kalshi always shows on a live board, so a grey one means its feed is down)
+  const pillShown = { "pill-pm": pmLive, "pill-kalshi": true, "pill-books": m.sources_live.sportsbooks || dkLive, "pill-model": m.model_loaded };
+  Object.entries(pillShown).forEach(([id, on]) => { $("#" + id).style.display = !m.archived && on ? "" : "none"; });
   // controls that need a key the public site does not have stay out of the way
   $("#refresh-ai").style.display = m.ai_enabled ? "" : "none";
 
@@ -143,6 +146,7 @@ function renderAll() {
   renderTopBettors();
   renderResearch();
   renderFutures();
+  _openHashTab();
   if (state.tab === "track") loadPaper();
 }
 
@@ -606,10 +610,12 @@ function renderBracket(br, archived) {
     const clickable = !archived && mu && !mu.winner && mu.a && mu.b;
     const pinned = mu && _isPinned(mu, team);
     const attrs = clickable ? ` data-pin-a="${esc(mu.a)}" data-pin-b="${esc(mu.b)}" data-pin-w="${esc(team)}"` : "";
-    return `<div class="bteam ${win ? "bwin" : ""} ${pinned ? "bpin" : ""} ${clickable ? "bclick" : ""}"${attrs}><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`;
+    return `<div class="bteam ${win ? "bwin" : ""} ${pinned ? "bpin" : ""} ${clickable ? "bclick" : ""}"${attrs}><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null || archived ? "" : pct + "%"}</span></div>`;
   };
   const match = (mu) => {
-    const tie = mu.mkt_a == null ? "" : `<div class="btie">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
+    const score = mu.score_a != null && mu.score_b != null ? `${mu.score_a}-${mu.score_b}${mu.pens ? " (pens)" : ""}` : "";
+    const tie = archived ? (score ? `<div class="btie">${score}</div>` : "")
+      : mu.mkt_a == null ? "" : `<div class="btie">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
     return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(archived ? (mu.winner ? `${teamName(mu.winner)} went through` : "") : matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a, mu)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b, mu)}${tie}</div>`;
   };
   const cols = br.rounds.map((r) => `<div class="bcol"><div class="bcol-h">${esc(r.name)}</div>${r.matchups.map(match).join("")}</div>`).join("");
@@ -1373,12 +1379,12 @@ function renderPaper() {
   if (calBox) {
     if (gated.length) {
       calBox.innerHTML = `<div class="pick-section"><h3>Calibration <span class="muted">· nudges confidence once a bucket clears 20 (CLV-first, never excludes a pick)</span></h3>
-        <table><thead><tr><th>Context bucket</th><th class="num">Sample</th><th>Status</th><th class="num">Signal</th></tr></thead><tbody>${
+        <div class="tbl-scroll"><table><thead><tr><th>Context bucket</th><th class="num">Sample</th><th>Status</th><th class="num">Signal</th></tr></thead><tbody>${
         gated.map((r) => `<tr>
           <td><span class="tag">${esc(r.dim)}</span> ${esc(String(r.val).replace(/_/g, " "))}</td>
           <td class="num">${r.n_eff}</td>
           <td><span class="ev pos">active</span></td>
-          <td class="num">${r.score == null ? "—" : (r.metric === "clv" ? sgn(r.score) + "% CLV" : sgn(r.score) + "pp")}</td></tr>`).join("")}</tbody></table></div>`;
+          <td class="num">${r.score == null ? "—" : (r.metric === "clv" ? sgn(r.score) + "% CLV" : sgn(r.score) + "pp")}</td></tr>`).join("")}</tbody></table></div></div>`;
     } else {
       const best = cal.reduce((mx, r) => Math.max(mx, r.n_eff || 0), 0);
       calBox.innerHTML = `<div class="cal-note">${ico("track")}<span>Confidence calibration unlocks once a context bucket reaches 20 settled picks. Best bucket so far: <b>${Math.round(best)}/20</b>.</span></div>`;
@@ -1388,7 +1394,7 @@ function renderPaper() {
   // by-archetype
   const arch = d.summary.by_archetype;
   const akeys = Object.keys(arch);
-  const archHtml = akeys.length ? `<div class="pick-section"><h3>By archetype</h3><table><thead><tr>
+  const archHtml = akeys.length ? `<div class="pick-section"><h3>By archetype</h3><div class="tbl-scroll"><table><thead><tr>
     <th>Archetype</th><th class="num">Picks</th><th class="num">Record</th><th class="num">Hit%</th>
     <th class="num">Avg CLV</th><th class="num">Beat close</th><th class="num">ROI</th></tr></thead><tbody>${
     akeys.map((k) => { const a = arch[k]; return `<tr>
@@ -1398,20 +1404,20 @@ function renderPaper() {
       <td class="num">${a.hit_rate == null ? "—" : a.hit_rate + "%"}</td>
       <td class="num ${a.avg_clv > 0 ? "ev pos" : ""}">${a.avg_clv == null ? "—" : sgn(a.avg_clv) + "%"}</td>
       <td class="num">${a.beat_close_pct == null ? "—" : a.beat_close_pct + "%"}</td>
-      <td class="num">${a.roi_pct == null ? "—" : a.roi_pct + "%"}</td></tr>`; }).join("")}</tbody></table></div>` : "";
+      <td class="num">${a.roi_pct == null ? "—" : a.roi_pct + "%"}</td></tr>`; }).join("")}</tbody></table></div></div>` : "";
   // model calibration: the model's projected P(hit) vs actual outcomes (fills as new picks settle)
   // a calibration row on two or three picks is noise, not a finding: only buckets of 20 or more show
   const mc = d.summary.model_calibration || {};
   const mck = Object.keys(mc).filter((k) => (mc[k].n || 0) >= 20);
   const calTbl = mck.length ? `<div class="pick-section"><h3>Model calibration <span class="muted">· projected vs actual once picks settle · Brier lower = sharper (0.25 = coin flip)</span></h3>
-    <table><thead><tr><th>Archetype</th><th class="num">n</th><th class="num">Model says</th><th class="num">Actual</th><th class="num">Gap</th><th class="num">Brier</th></tr></thead><tbody>${
+    <div class="tbl-scroll"><table><thead><tr><th>Archetype</th><th class="num">n</th><th class="num">Model says</th><th class="num">Actual</th><th class="num">Gap</th><th class="num">Brier</th></tr></thead><tbody>${
     mck.map((k) => { const m = mc[k]; const over = m.gap_pp > 5, under = m.gap_pp < -5; return `<tr>
       <td><span class="tag">${esc(k.replace(/_/g, " "))}</span></td>
       <td class="num">${m.n}</td>
       <td class="num">${Math.round(m.mean_pred * 100)}%</td>
       <td class="num">${Math.round(m.hit_rate * 100)}%</td>
       <td class="num ${over ? "neg" : ""}">${sgn(m.gap_pp)}pp${over ? " over" : under ? " under" : ""}</td>
-      <td class="num">${m.brier}</td></tr>`; }).join("")}</tbody></table>
+      <td class="num">${m.brier}</td></tr>`; }).join("")}</tbody></table></div>
     <div class="cal-note">${ico("track")}<span>A large positive gap (model says more than actual) means the model over-projects that archetype.</span></div></div>` : "";
   $("#track-arch").innerHTML = archHtml + calTbl;
 
@@ -1477,6 +1483,8 @@ function trackCard(p) {
   const stCls = p.status === "won" ? "won" : p.status === "lost" ? "lost" : "";
   // CLV only applies to bets with a closing-line metric (moneylines) — don't show "CLV —" noise on props
   const clv = p.clv_pct == null ? "" : `<span class="ev ${p.clv_pct > 0 ? "pos" : ""}">CLV ${sgn(p.clv_pct)}%</span>`;
+  // a close captured during the game (or pinned at the clamp) is shown but never counted as CLV
+  const inPlay = p.close_flag && p.closing_fair_prob != null ? ` <span class="muted" title="captured after the start or pinned at the clamp, so it is left out of every CLV number">(in-play close, not counted)</span>` : "";
   const settled = p.closing_locked_at ? ` <span class="tag">auto-settled</span>` : "";
   // build the meta as clean dot-separated segments — omit entry→close for non-CLV picks
   const segs = [esc(p.match)];
@@ -1484,7 +1492,7 @@ function trackCard(p) {
   if (when) segs.push(when);
   if (p.pick_fair_prob != null) {
     segs.push(`entry ${(p.pick_fair_prob * 100).toFixed(0)}%`
-      + (p.closing_fair_prob != null ? ` → close ${(p.closing_fair_prob * 100).toFixed(0)}%` : ""));
+      + (p.closing_fair_prob != null ? ` → close ${(p.closing_fair_prob * 100).toFixed(0)}%${inPlay}` : ""));
   }
   segs.push(`${p.stake_units || 1}u`);
   const pl = (p.units_pl != null && (p.status === "won" || p.status === "lost"))
@@ -1526,7 +1534,7 @@ function switchTab(name) {
   if (name === "track") loadPaper();
   if (name === "slip") loadMyBets();
 }
-document.querySelectorAll(".tab").forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => { state.hashPending = false; switchTab(t.dataset.tab); });
 
 $("#refresh").onclick = () => loadSnapshot(true, false);   // free feeds only
 $("#refresh-odds").onclick = () => {
@@ -1669,12 +1677,16 @@ document.addEventListener("click", (e) => {
 // ---------- boot ----------
 const _hadPins = _loadPins();   // restore scenario pins from a prior visit (deltas recompute fresh)
 // a board address can carry its tab (/cfb/#lotto), so switching sports keeps you on the same tab
+// (tried after every render until it lands: the tab may only appear once the board's data says it can)
 function _openHashTab() {
+  if (!state.hashPending || !state.snapshot) return;
   let name = "";
-  try { name = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { return; }   // a mangled link
+  try { name = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { state.hashPending = false; return; }
   const btn = name && document.querySelector(`.tab[data-tab="${CSS.escape(name)}"]`);
-  if (btn && btn.style.display !== "none") switchTab(name);
+  if (!btn) { state.hashPending = false; return; }                 // a mangled or stale link: stay put
+  if (btn.style.display !== "none") { state.hashPending = false; switchTab(name); }
 }
+state.hashPending = !!location.hash;
 // scenario pins belong to the World Cup bracket; every board shares one origin now, so only a board with
 // futures refreshes them (the others would run a soccer bracket sim for a hidden tab)
 const _hasFutures = () => (((state.snapshot || {}).meta || {}).capabilities || []).includes("futures");

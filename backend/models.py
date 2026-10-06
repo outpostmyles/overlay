@@ -31,6 +31,7 @@ class Quote:
             "american": _american(self.price_decimal),
             "implied_prob": round(self.implied_prob, 4),
             "mid_prob": round(self.mid_prob, 4) if self.mid_prob is not None else None,
+            "ask": round(self.ask, 4) if self.ask is not None else None,   # None: a last trade, not a price on offer
             "fee": self.fee,
             "volume": self.volume,
             "link": self.link,

@@ -104,6 +104,7 @@ NFL = register(SportAdapter(
     capabilities=frozenset(),          # anchor-only
     aliases=_ALIASES,
     results_window_days=10,            # a Thursday-to-Monday week plus slack
+    slate_horizon_days=6,              # six days ahead reaches every game of the week once (four from a Tuesday stopped short of Sunday)
     pair_only_key=False,               # division rivals meet twice: key on pair + date
     # per game: both starting QBs, the lead backs, the featured receivers, and the likeliest scorers
     ledger_prop_quota=(("passing yards", 2), ("rushing yards", 4), ("receiving yards", 6),

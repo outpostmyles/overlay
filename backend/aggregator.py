@@ -34,7 +34,7 @@ _odds_state: dict = {"markets": [], "fetched_at": 0.0, "credits_remaining": None
 # corner total lines (The Odds API, pricey/manual) — kept teams-keyed, persisted in the odds cache file
 _corner_state: dict = {"lines": {}, "fetched_at": 0.0}
 # futures: Monte Carlo tournament sim vs de-vigged Polymarket futures (expensive → cached + threaded)
-_futures_cache: dict = {"data": {"rows": [], "groups_covered": 0, "sims": 0}, "ts": 0.0}
+_futures_cache: dict = {"data": {"rows": [], "groups_covered": 0, "sims": 0, "final": None, "archived": False}, "ts": 0.0}
 # research layer: ESPN summaries (QB status + DraftKings line) per event, and past weeks' start times
 _research_cache: dict = {"extras": {}, "weeks": {}}
 # the latest board's games by dedup key (teams, date, kickoff, market, legs, research), so a bet logged
@@ -228,13 +228,12 @@ def _parlay_row(sgp: dict | None) -> dict | None:
     if not sgp or not sgp.get("pricing"):
         return None
     pr = sgp["pricing"]
-    today = time.strftime("%Y-%m-%d")
     sel = " + ".join(l["selection"] for l in sgp["legs"])
     return {
         "match": sgp["event"], "archetype": "parlay", "selection": sel[:120],
         "commence_time": sgp.get("commence_time"),
         "pick_fair_prob": pr["joint_prob"], "pick_price_decimal": pr["payout"],
-        "dedup_key": f"{today}:parlay:{sgp['event']}",
+        "dedup_key": f"{paper.game_day(sgp.get('commence_time'))}:parlay:{sgp['event']}",   # one per game
         "stake_units": sgp.get("stake_units", 1.0),
         "legs_json": json.dumps(sgp["legs"]),
     }
@@ -278,10 +277,12 @@ async def get_kickoffs(dates: list[str]) -> dict:
             # the kickoff was then never re-asked for, `ko` was None for the whole lock window, and
             # every 21:15-ET-or-later game was silently voided instead of locked.
             keep = {d for d in _kickoff_cache["dates"] if d < today}
+            # (pair, date) starts and their (pair, date, "tbd") placeholder markers prune together, so a
+            # kept start never loses the flag that says it is not a real time
             surv = {k: v for k, v in _kickoff_cache["map"].items()
-                    if v and isinstance(k, tuple) and len(k) == 2
+                    if v and isinstance(k, tuple) and len(k) in (2, 3)
                     and str(k[1]).replace("-", "") in keep}
-            surv.update({k[0]: v for k, v in list(surv.items())})   # rebuild the pair-only aliases
+            surv.update({k[0]: v for k, v in list(surv.items()) if len(k) == 2})   # rebuild the pair-only aliases
             _kickoff_cache["map"], _kickoff_cache["dates"] = surv, keep
             _kickoff_cache["ts"] = now
         missing = sorted(need - _kickoff_cache["dates"])   # past dates fetch once ever; current always refetch
@@ -465,9 +466,9 @@ async def _pre_start_closes(favs: list[dict]) -> dict:
 
 
 def _slate_matchups(markets: list[Market]) -> list[dict]:
-    """Favorite-vs-underdog pairs for moneyline games on the slate (today + horizon), soonest
+    """Favorite-vs-underdog pairs for moneyline games on the slate (today + the sport's horizon), soonest
     first. Feeds match-level smart money. Mirrors the favorite logic in picks.generate."""
-    horizon = getattr(config, "SLATE_HORIZON_DAYS", 4)
+    horizon = picks.slate_horizon(config)
     out = []
     for m in markets:
         if m.market_type != "moneyline":
@@ -523,10 +524,21 @@ def _warn_silent_joins(markets: list, joined: dict) -> None:
             print(f"[ledger] {mtype} joins recovered: {len(games)} game(s)")
 
 
+def _rung_width(sel) -> float | None:
+    """Ask minus bid on a ladder rung's Kalshi book, or None when either side is empty. The rung's fair
+    price is that book's midpoint, which means something only when both sides are quoted."""
+    for q in sel.quotes:
+        if q.source == "kalshi" and q.bid is not None and q.ask is not None:
+            return kalshi.book_width(q.bid, q.ask)
+    return None
+
+
 def _totals_by_game(markets: list) -> dict:
-    """{(team_pair, commence[:16]): [(line, fair_over)]} from per-line total markets. Keyed by pair +
-    start time (both sides derive from the same Kalshi ticker) so a doubleheader's two games keep
-    their own lines; _merge rewrites market ids, so the ticker token cannot be the join key."""
+    """{(team_pair, commence[:16]): [(line, fair_over, width)]} from per-line total markets, `width` being
+    the rung's book (see _rung_width). Every rung joins, thin or not; _main_line decides which may set the
+    game's line. Keyed by pair + start time (both sides derive from the same Kalshi ticker) so a
+    doubleheader's two games keep their own lines; _merge rewrites market ids, so the ticker token cannot
+    be the join key."""
     out: dict = {}
     for m in markets:
         if m.market_type != "total":
@@ -546,15 +558,17 @@ def _totals_by_game(markets: list) -> dict:
             line = float(over.key.split("_", 1)[1])
         except (ValueError, IndexError):
             continue
-        out.setdefault((pair, (m.commence_time or "")[:16]), []).append((line, over.fair_prob))
+        out.setdefault((pair, (m.commence_time or "")[:16]), []).append(
+            (line, over.fair_prob, _rung_width(over)))
     return out
 
 
 def _spreads_by_game(markets: list) -> dict:
-    """{(team_pair, commence[:16]): [(cover_team, line, fair_cover)]} from per-line spread markets. Each one
-    reads "cover_team wins by more than line": its yes side is cover_team -line and its no side is the
-    opponent +line, so every line is its own 2-way book, de-vigged within itself and never across lines.
-    The pair and the covering team both come from the ticker (packed into `group` by the parser)."""
+    """{(team_pair, commence[:16]): [(cover_team, line, fair_cover, width)]} from per-line spread markets.
+    Each one reads "cover_team wins by more than line": its yes side is cover_team -line and its no side is
+    the opponent +line, so every line is its own 2-way book, de-vigged within itself and never across lines.
+    The pair and the covering team both come from the ticker (packed into `group` by the parser); `width`
+    is the rung's book, as for totals."""
     out: dict = {}
     for m in markets:
         if m.market_type != "spread":
@@ -568,8 +582,47 @@ def _spreads_by_game(markets: list) -> dict:
         except (ValueError, IndexError):
             continue
         out.setdefault((frozenset((packed[1], packed[2])), (m.commence_time or "")[:16]), []).append(
-            (packed[3], line, over.fair_prob))
+            (packed[3], line, over.fair_prob, _rung_width(over)))
     return out
+
+
+MAIN_LINE_BAND = (0.30, 0.70)       # a main total or spread is priced near a coin flip
+LADDER_NOISE = 0.01                 # how far a higher rung may sit above a lower one and still count as in order
+
+
+def _main_line(ladder: list[tuple]) -> tuple | None:
+    """The game's main line from one ladder of (threshold, p_over, width, rung) rows: the rung priced nearest
+    a coin flip, chosen only among tight books (both sides quoted, at most FORECAST_MAX_LINE_WIDTH apart)
+    that agree with each other. Returns that row's `rung`, or None when no rung qualifies.
+
+    Tight, because a thin book's midpoint is a coin flip by accident: two days out, most of Kalshi's NHL
+    rungs sit at bids near 0.02 and asks near 0.84, and "nearest a coin flip" showed Over 3.5 at 53% off
+    a 0.11/0.95 book, a line that tight books on other games priced near 86%. Agreeing, because the over
+    must get less likely as the line rises: a tight rung out of that order is stale, so the longest ordered
+    run of rungs is kept (ties go to the tighter books) and the rest are set aside before the coin flip is
+    read (a half-cent inversion between tight books is quoting noise, not staleness). Two rungs equally
+    near it keep the feed's order, as before (one at 48.5%, one at 51.5%). The pick must also be a real
+    main line: a lone tight rung at 80% ("Over 4.5" on a hockey game two days out) is a side bet, not
+    the game's total, so outside MAIN_LINE_BAND the game shows no line until its ladder fills in."""
+    rows = [(t, p, w, n, rung) for n, (t, p, w, rung) in enumerate(ladder)
+            if w is not None and w <= config.FORECAST_MAX_LINE_WIDTH]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r[0], -r[1]))            # up the ladder
+    # run[i] = (rungs in the best ordered run ending at rung i, minus their total width, the rung before i)
+    run: list[tuple] = []
+    for i, (_, p, w, _, _) in enumerate(rows):
+        best = (1, -w, None)
+        for j in range(i):
+            if rows[j][1] >= p - LADDER_NOISE and (run[j][0] + 1, run[j][1] - w) > best[:2]:
+                best = (run[j][0] + 1, run[j][1] - w, j)
+        run.append(best)
+    kept, i = [], max(range(len(rows)), key=lambda k: run[k][:2])
+    while i is not None:
+        kept.append(rows[i])
+        i = run[i][2]
+    pick = min(kept, key=lambda r: (abs(r[1] - 0.5), r[3]))     # nearest a coin flip, then feed order
+    return pick[4] if MAIN_LINE_BAND[0] <= pick[1] <= MAIN_LINE_BAND[1] else None
 
 
 def _props_by_game(markets: list) -> dict:
@@ -784,8 +837,9 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             continue
         gate = sports.active().max_lock_spread
         if gate < 1.0:
-            widths = [q.ask - q.bid for t in teams for q in t.quotes
-                      if q.source == "kalshi" and q.ask is not None and q.bid is not None]
+            # each team's own book, an empty side read as its edge: a 99c favorite (bid 0.99, ask 1.00) and
+            # its 1c opponent are one-cent books, so the game stays, as it does on Best Bets
+            widths = [kalshi.book_width(q.bid, q.ask) for t in teams for q in t.quotes if q.source == "kalshi"]
             if not widths or max(widths) > gate:
                 continue                          # thin book: no forecast until it tightens
         a, b = teams[0].key, teams[1].key
@@ -813,8 +867,13 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
                     if kickoffs.get((frozenset((a, b)), d)):
                         ko, gdate = kickoffs[(frozenset((a, b)), d)], d
                         break
-        kdt = _parse_iso(ko)
-        if kdt is None and not doubleheader and (a, b, gdate) not in _no_kickoff_seen:
+        # ESPN files a game whose start is not set yet (college TV windows) at local midnight, 04:00Z, with
+        # timeValid false. That is a date, not a start: locking 75 minutes before it would freeze the line
+        # most of a day early, and passing it would void the game as missed before a snap. The placeholder
+        # still orders the game within its day, and the entry says time_tbd, but it never locks or misses.
+        time_tbd = bool(ko) and bool(kickoffs.get(espn.tbd_key(frozenset((a, b)), gdate)))
+        kdt = None if time_tbd else _parse_iso(ko)
+        if kdt is None and not doubleheader and not time_tbd and (a, b, gdate) not in _no_kickoff_seen:
             # a listed game ESPN cannot place is a game that can never lock, usually a name mismatch
             # (college football meets new opponents weekly); say so once instead of failing silently
             _no_kickoff_seen.add((a, b, gdate))
@@ -841,19 +900,24 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
         sources = ",".join(sorted({q.source for s in m.selections for q in s.quotes
                                    if q.source in config.SHARP_SOURCES}))
         legs = _predict_legs(model, corner_rates, a, b, poss, perf)
-        # market-anchored total leg (Kalshi per-line totals): the MAIN line (fair closest to a coin
-        # flip) locks alongside the 1X2 and grades free off the final score, model or no model
-        game_lines = (totals or {}).get((frozenset((a, b)), (m.commence_time or "")[:16]))
-        if game_lines:
-            line, fair_over = min(game_lines, key=lambda x: abs(x[1] - 0.5))
+        # market-anchored total leg (Kalshi per-line totals): the MAIN line (the tight rung nearest a coin
+        # flip, see _main_line) locks alongside the 1X2 and grades free off the final score, model or no
+        # model. A game with no tight rung gets no total leg until its ladder fills in.
+        game_lines = (totals or {}).get((frozenset((a, b)), (m.commence_time or "")[:16])) or []
+        main = _main_line([(ln, p, w, (ln, p)) for ln, p, w in game_lines])
+        if main:
+            line, fair_over = main
             legs.append({"key": "total_goals", "side": "over" if fair_over >= 0.5 else "under",
                          "line": line, "team": None,
                          "prob": round(max(fair_over, 1 - fair_over), 3), "proj": None})
-        # the spread's MAIN line (the one nearest a coin flip, usually the favorite's): "cover" backs the
-        # covering team at -line, "not" backs the opponent at +line. Graded off the final margin.
-        game_spreads = (spreads or {}).get((frozenset((a, b)), (m.commence_time or "")[:16]))
-        if game_spreads:
-            cover, line, pc = min(game_spreads, key=lambda x: abs(x[2] - 0.5))
+        # the spread's MAIN line (the same rule, usually the favorite's): "cover" backs the covering team at
+        # -line, "not" backs the opponent at +line. Graded off the final margin. Both teams' rungs make one
+        # ladder in team a's margin: a's margin is above -3.5 exactly when "b wins by over 3.5" fails.
+        game_spreads = (spreads or {}).get((frozenset((a, b)), (m.commence_time or "")[:16])) or []
+        main = _main_line([(ln, pc, w, (cv, ln, pc)) if cv == a else (-ln, 1 - pc, w, (cv, ln, pc))
+                           for cv, ln, pc, w in game_spreads])
+        if main:
+            cover, line, pc = main
             legs.append({"key": "spread", "team": cover, "opp": b if cover == a else a, "line": line,
                          "side": "cover" if pc >= 0.5 else "not",
                          "prob": round(max(pc, 1 - pc), 3), "proj": None})
@@ -903,7 +967,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             rs = research.evaluate(sports.active().key, ctx, market, legs, a, b)
         asks = {s.key: q.ask for s in teams for q in s.quotes if q.source == "kalshi" and q.ask}
         board[dedup] = {
-            "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
+            "lock_now": lock_now, "missed": missed, "kickoff_iso": ko, "time_tbd": time_tbd,
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
             "market": market,
             "sources": sources,
@@ -1120,9 +1184,9 @@ def _merge(markets: list[Market]) -> list[Market]:
 def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[dict]:
     """Turn AI recommended_bets into paper-ledger rows. Favorite-ML picks get a fair prob + best
     price (→ CLV trackable); other archetypes are logged for hit-rate (no odds/CLV)."""
-    today = time.strftime("%Y-%m-%d")
     bundle_by = {b["match"]: b for b in bundles}
-    ml_price = {(r["event"], r["selection"]): r["best_price_decimal"]
+    # keyed by the game's start too: a series repeats the label, and each game has its own price
+    ml_price = {(r["event"], r.get("commence_time"), r["selection"]): r["best_price_decimal"]
                 for r in best if r["market_type"] == "moneyline"}
     rows = []
     for match, v in verdicts.items():
@@ -1137,7 +1201,7 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
             if arch == "favorite_ml" and b.get("favorite"):
                 fav = b["favorite"]
                 fair = (b.get("favorite_fair_pct") or 0) / 100 or None
-                price = ml_price.get((match, fav)) or (round(1 / fair, 3) if fair else None)
+                price = ml_price.get((match, b.get("commence_time"), fav)) or (round(1 / fair, 3) if fair else None)
                 sel = f"{fav} ML"
                 on_favorite = 1
                 if b.get("favorite_model_pct") is not None:
@@ -1161,7 +1225,7 @@ def _paper_rows(verdicts: dict, bundles: list[dict], best: list[dict]) -> list[d
                 "match": match, "archetype": arch, "selection": sel,
                 "confidence": v.get("confidence"), "commence_time": b.get("commence_time"),
                 "pick_fair_prob": fair, "pick_price_decimal": price, "model_prob": mprob,
-                "dedup_key": f"{today}:{match}:{arch}:{sel}",
+                "dedup_key": f"{paper.game_day(b.get('commence_time'))}:{match}:{arch}:{sel}",
                 "odds_type": odds_type, "popularity": popularity,
                 "on_favorite": on_favorite, "agreement_pp": agreement_pp,
                 "stake_units": _stake_units(v.get("confidence")),
@@ -1232,16 +1296,16 @@ def _daily_card(verdicts: dict, bundles: list[dict]) -> tuple[list, dict | None]
 def _enrich_bundles_price(bundles: list[dict], best_lines: list[dict]) -> None:
     """Attach the favorite's best executable price + EV-vs-sharp-fair to each reasoning bundle, so
     the AI verdict can reason on the REAL edge (and honestly say 'no edge, market's efficient' when
-    the best price doesn't beat fair — common on heavy favorites)."""
-    ml = {(r["event"], r["selection"]): r
-          for r in best_lines if r.get("market_type") == "moneyline"}
+    the best price doesn't beat fair, common on heavy favorites). Looked up by the bundle's own game and
+    priced after Kalshi's fee, the same way its Best Bets card is."""
+    price_line = _price_lookup(best_lines)
     for b in bundles:
-        r = ml.get((b.get("match"), b.get("favorite")))
-        if not r:
+        pl = price_line(b.get("match"), b.get("favorite"), b.get("commence_time"))
+        if not pl:
             continue
-        b["favorite_best_price_american"] = r["best_american"]
-        b["favorite_best_book"] = r["best_source"]
-        b["favorite_market_ev_pct"] = round(r["ev"] * 100, 1) if r.get("ev") is not None else None
+        b["favorite_best_price_american"] = pl["best_american"]
+        b["favorite_best_book"] = pl["best_book"]
+        b["favorite_market_ev_pct"] = pl["ev_pct"]
 
 
 def _stake_units(confidence, tier=None, source=None) -> float:
@@ -1263,32 +1327,132 @@ def _stake_fields(confidence, tier=None) -> dict:
     return {"stake_units": units, "stake_dollars": round(units * config.BANKROLL * config.UNIT_PCT)}
 
 
-def _price_lookup(best_lines: list[dict]):
-    """(match, team label) -> best moneyline price row, for folding line-shopping onto cards."""
-    ml = {(r["event"], r["selection"]): r
-          for r in best_lines if r.get("market_type") == "moneyline"}
+def _kalshi_cost(ask: float) -> float:
+    """What one Kalshi contract really costs at `ask`: the price plus the taker fee, coef * p * (1 - p)."""
+    return ask + config.KALSHI_FEE_COEF * ask * (1 - ask)
 
-    def line(match, team):
-        r = ml.get((match, team))
+
+def _net_decimal(q: dict) -> float | None:
+    """A quote's decimal price after its fee, or None when it is not a price anyone can take. Kalshi charges
+    the taker fee on top of the ask, so its raw 1/ask overstates the payout, and a Kalshi quote with no ask
+    is only a last trade (Value Now ignores those too). A sportsbook's price is what it pays; a Polymarket
+    quote's own fee is not netted here, since no live US board prices its games there."""
+    if q.get("source") == "kalshi":
+        if "ask" in q and not q.get("ask"):
+            return None
+        ask = q.get("ask") or q.get("implied_prob") or (1 / q["price_decimal"] if q.get("price_decimal") else None)
+        if ask and 0 < ask < 1:
+            return 1 / _kalshi_cost(ask)
+        return None
+    return q["price_decimal"]
+
+
+def _price_lookup(best_lines: list[dict]):
+    """(match, team label, start) -> the best moneyline price, for folding line-shopping onto cards.
+
+    Keyed by the game's start as well as its label: both games of a postseason series are "Los Angeles D
+    vs Atlanta", and a label-only key priced the second game's card at the first game's line and EV. A
+    caller with no start (an AI verdict from an old cache) gets a label's price only when one game has
+    it. Prices are net of Kalshi's taker fee, as in Value Now and the lotto, and the best venue is chosen
+    after the fee, so a raw Kalshi ask never outranks a book that actually pays more."""
+    ml, by_label = {}, {}
+    for r in best_lines:
+        if r.get("market_type") != "moneyline":
+            continue
+        ml[(r["event"], r.get("commence_time"), r["selection"])] = r
+        by_label.setdefault((r["event"], r["selection"]), []).append(r)
+
+    def line(match, team, commence_time=None):
+        r = ml.get((match, commence_time, team))
+        if r is None and commence_time is None:
+            rows = by_label.get((match, team)) or []
+            r = rows[0] if len(rows) == 1 else None
         if not r:
             return {}
-        return {"best_price_decimal": r["best_price_decimal"], "best_american": r["best_american"],
-                "best_book": r["best_source"],
-                "ev_pct": round(r["ev"] * 100, 1) if r.get("ev") is not None else None}
+        quotes = r.get("all_quotes") or [{"source": r["best_source"], "price_decimal": r["best_price_decimal"]}]
+        priced = [q for q in quotes if _net_decimal(q)]
+        if not priced:
+            return {}
+        best = max(priced, key=_net_decimal)
+        dec = _net_decimal(best)
+        ev = r["fair_prob"] * dec - 1 if (r.get("ev") is not None and r.get("fair_prob")) else None
+        return {"best_price_decimal": round(dec, 4), "best_american": odds_math.decimal_to_american(dec),
+                "best_book": best["source"], "ev_pct": round(ev * 100, 1) if ev is not None else None}
     return line
 
 
-def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict | None = None) -> list[dict]:
+def _ml_team(sel: str) -> str:
+    """The team in an AI moneyline selection, which may come decorated: "Belgium ML (Kalshi -213)"."""
+    mt = re.match(r"(.+?)\s+ML\b", sel or "")
+    return (mt.group(1) if mt else (sel or "").replace(" ML", "")).strip()
+
+
+def _research_for(research_by_game: dict, f: dict) -> dict | None:
+    """A favorite's own game's research, from {(pair, date): research}. A pair-only key handed every game
+    of a series (or a rematch inside the horizon) the first game's Research % and DraftKings price. A
+    weekly sport's row can sit a day off the market's date (kickoff_date_slack moves it to ESPN's), so
+    the neighboring dates inside that slack are tried, nearest first."""
+    pair = frozenset((f.get("team_key"), f.get("opp_key")))
+    gdate = (f.get("commence_time") or "")[:10]
+    hit = research_by_game.get((pair, gdate))
+    slack = sports.active().kickoff_date_slack
+    if hit is None and slack and gdate:
+        try:
+            day = date.fromisoformat(gdate)
+        except ValueError:
+            return None
+        for k in sorted(range(-slack, slack + 1), key=abs)[1:]:
+            hit = research_by_game.get((pair, (day + timedelta(days=k)).isoformat()))
+            if hit is not None:
+                break
+    return hit
+
+
+def _favorite_value(card: dict, backed: bool) -> dict:
+    """Whether a favorite card is a bet or only a favorite. It is value when a real price beats our number
+    (the Research %, else the market's) by the board's game cushion: DraftKings' line scored against the
+    research, or the best line after Kalshi's fee. An AI verdict that recommends it counts too. A favorite
+    nothing prices well still shows, but as a favorite with no stake: the market being right about who
+    wins is not an edge on the price."""
+    ours = card.get("research_prob") if card.get("research_prob") is not None else card.get("market_prob")
+    cushion = card.get("cushion") or 0.02
+    offers = []
+    if card.get("dk_ev") is not None:
+        offers.append((card["dk_ev"], card.get("dk_book") or "DraftKings"))
+    if ours and card.get("best_price_decimal"):
+        offers.append((round(ours * card["best_price_decimal"] - 1, 4), card.get("best_book")))
+    ev, venue = max(offers, key=lambda o: o[0]) if offers else (None, None)
+    value = bool(backed or (ev is not None and ev >= cushion))
+    out = {"value": value, "value_ev": ev, "value_venue": venue}
+    if value:
+        out.update(tier="lean", **_stake_fields(None, "lean"))
+    else:
+        out.update(tier="favorite", stake_units=None, stake_dollars=None)
+    return out
+
+
+def _best_bets(picks_board: dict, best_lines: list[dict], research_by_game: dict | None = None,
+               model_loaded: bool = True) -> list[dict]:
     """One ranked, cards-first feed scoped to the user's archetypes. Sorted by SOURCE TIER first
     (AI-reasoned > strong/lean heuristic reads > live non-chalk favorites) then within-tier score,
     so credibility — not a brittle mixed scale — drives the order. The best available price + book
-    + EV-vs-fair is folded onto every moneyline card (line-shopping at the point of decision)."""
+    + EV-vs-fair is folded onto every moneyline card (line-shopping at the point of decision).
+
+    Each card says whether it is `value`: an AI verdict or a corner total is (a verdict backs it, a book
+    price clears the model); a prop read has no price to judge (None); a favorite is only when a real
+    price beats our number (see _favorite_value), and otherwise carries no stake. Within the favorites,
+    value cards lead by EV and the rest follow by probability. A favorite's number is the market's on a
+    board with no model (`model_loaded` False), and its card says so with source "market"."""
     ai = picks_board.get("ai", {})
     price_line = _price_lookup(best_lines)
     cards, seen = [], set()
     ai_players = " ".join(
         (bet.get("selection") or "") for v in ai.values() for bet in v.get("recommended_bets", [])
     ).lower()
+    # (match, start, team) of every moneyline an AI verdict recommends; start is None on an old cache row
+    backed = {(match, v.get("commence_time"), _ml_team(bet.get("selection")))
+              for match, v in ai.items() for bet in v.get("recommended_bets", [])
+              if bet.get("archetype") == "favorite_ml"}
 
     def add(key, card):
         if key not in seen:
@@ -1303,13 +1467,11 @@ def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict
                 "days_out": v.get("days_out"), "confidence": v.get("confidence"),
                 "reasoning": bet.get("rationale"), "risk": v.get("key_risk"),
                 "research": v.get("research"), "memory_note": v.get("memory_note"),
-                "tier_rank": 3, "score": v.get("confidence") or 3,
+                "tier_rank": 3, "score": v.get("confidence") or 3, "value": True,
                 **_stake_fields(v.get("confidence")),
             }
             if arch == "favorite_ml":
-                mt = re.match(r"(.+?)\s+ML\b", sel)            # AI may decorate: "Belgium ML (Kalshi -213)"
-                team = (mt.group(1) if mt else sel.replace(" ML", "")).strip()
-                card.update(price_line(match, team))
+                card.update(price_line(match, _ml_team(sel), v.get("commence_time")))
             add((arch, sel.lower()), card)
 
     for sect in ("anytime_goalscorer", "shots_sot", "popular_props"):   # tier 2 — strong/lean reads
@@ -1328,6 +1490,7 @@ def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict
                 "confidence": None, "tier": rd.get("tier"), "reasoning": rd.get("rationale"),
                 "trap": rd.get("trap_risk"), "model_prob": r.get("model_prob"), "model_value": r.get("model_value"),
                 "tier_rank": 2, "score": rd.get("read_score", 50) + (12 if rd.get("tier") == "strong" else 0),
+                "value": None,                              # a pick'em read: no price to beat
                 **_stake_fields(None, rd.get("tier")),
             })
 
@@ -1344,49 +1507,66 @@ def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict
             "best_american": odds_math.decimal_to_american(r["price"]), "best_book": r.get("book"),
             "ev_pct": round(r["ev"] * 100, 1),
             "model_prob": r["model_prob"], "model_value": "value" if r["ev"] >= 0.08 else "lean",
-            "tier_rank": 2, "score": 60 + r["ev"] * 100,
+            "tier_rank": 2, "score": 60 + r["ev"] * 100, "value": True,   # it cleared CORNER_EDGE_MIN
             **_stake_fields(None, tier),
         })
 
     for f in picks_board.get("favorite_ml", []):        # tier 1: live favorites, heavy ones included
         model_txt = f", model {f['model_prob'] * 100:.0f}%" if f.get("model_prob") is not None else ""
         card = {
-            "source": "model", "archetype": "favorite_ml", "selection": f"{f['team']} ML",
-            "match": f.get("event"), "days_out": f.get("days_out"), "confidence": None, "tier": "lean",
+            "source": "model" if model_loaded else "market", "archetype": "favorite_ml",
+            "selection": f"{f['team']} ML",
+            "match": f.get("event"), "days_out": f.get("days_out"), "confidence": None,
             "reasoning": f"{f['fair_prob'] * 100:.0f}% sharp fair{model_txt}",
             "market_prob": f.get("fair_prob"), "model_prob": f.get("model_prob"),  # for the gap chip
             "chalk": bool(f.get("chalk")),
-            "tier_rank": 1, "score": f["fair_prob"] * 100,
-            **_stake_fields(None, "lean"),
+            "tier_rank": 1,
         }
-        card.update(price_line(f.get("event"), f.get("team")))
-        rs = (research_by_pair or {}).get(frozenset((f.get("team_key"), f.get("opp_key"))))
+        card.update(price_line(f.get("event"), f.get("team"), f.get("commence_time")))
+        rs = _research_for(research_by_game or {}, f)
         if rs:
             card.update(_research_card(rs, f.get("team_key")))
-        add(("ml", f.get("team_key")), card)
+        is_backed = ((f.get("event"), f.get("commence_time"), f.get("team")) in backed
+                     or (f.get("event"), None, f.get("team")) in backed)
+        card.update(_favorite_value(card, is_backed))
+        ours = card.get("research_prob") if card.get("research_prob") is not None else card["market_prob"]
+        card["score"] = (card["value_ev"] or 0) * 100 if card["value"] else (ours or 0) * 100
+        # one card per game, not per team: a team plays several games inside the horizon (a series, a week)
+        add(("ml", f.get("team_key"), f.get("commence_time")), card)
 
-    cards.sort(key=lambda c: (c["tier_rank"], c["score"]), reverse=True)
+    # within the favorites, the ones worth a stake lead (by EV), and the rest follow by probability
+    cards.sort(key=lambda c: (c["tier_rank"], c["tier_rank"] == 1 and c.get("value") is True, c["score"]),
+               reverse=True)
     return cards[:24]
 
 
 def _value_now(games: list[dict]) -> list[dict]:
     """Every line where a real price beats the Research % by its cushion right now: DraftKings' moneyline,
     spread and total (via ESPN), and Kalshi's own moneyline ask after its fee. One row per side, best
-    value first. `games` are the live board entries (with team_a, team_b, kickoff_iso, dedup)."""
+    value first. `games` are the live board entries (with team_a, team_b, kickoff_iso, dedup, market).
+
+    A board with no research layer (MLB) still gets the Kalshi check, against the de-vigged market with
+    the default 2% cushion; skipping those games left its Value Now empty for good. Each row says which
+    number it beat in `basis`: "research" or "market"."""
     out = []
     for g in games:
         rs = g.get("research") or {}
-        if not rs:
-            continue
-        cushion = (rs.get("cushion") or {}).get("game") or 0.02
+        if rs:
+            basis, probs = "research", rs.get("ml") or {}
+            cushion = (rs.get("cushion") or {}).get("game") or 0.02
+            value_at = rs.get("value_at") or {}
+        else:
+            m = g.get("market") or (0, 0, 0)
+            basis, probs, cushion = "market", {g["team_a"]: m[0], g["team_b"]: m[2]}, 0.02
+            value_at = {t: research.value_at(p, cushion) for t, p in probs.items()}
         dk = rs.get("dk") or {}
         base = {"dedup": g["dedup"], "team_a": g["team_a"], "team_b": g["team_b"],
-                "kickoff_iso": g.get("kickoff_iso"), "cushion": cushion}
+                "kickoff_iso": g.get("kickoff_iso"), "cushion": cushion, "basis": basis}
         for team, ev in (dk.get("ev") or {}).items():
             if ev is not None and ev >= cushion:
                 out.append({**base, "kind": "ml", "team": team, "venue": dk.get("book") or "DraftKings",
-                            "price": dk["ml"][team], "p": (rs.get("ml") or {}).get(team), "ev": ev,
-                            "value_at": (rs.get("value_at") or {}).get(team)})
+                            "price": dk["ml"][team], "p": probs.get(team), "ev": ev,
+                            "value_at": value_at.get(team)})
         sp = dk.get("spread") or {}
         for side, ev_key, price_key in (("cover", "ev_cover", "cover"), ("dog", "ev_dog", "dog")):
             ev = sp.get(ev_key)
@@ -1402,25 +1582,27 @@ def _value_now(games: list[dict]) -> list[dict]:
                 out.append({**base, "kind": "total", "dir": d, "line": tot["line"],
                             "venue": dk.get("book") or "DraftKings", "price": tot[d], "ev": ev})
         for team, ask in (g.get("kalshi_ask") or {}).items():
-            p = (rs.get("ml") or {}).get(team)
+            p = probs.get(team)
             if not p or not ask or not 0 < ask < 1:
                 continue
-            cost = ask + config.KALSHI_FEE_COEF * ask * (1 - ask)     # the taker fee per contract
+            cost = _kalshi_cost(ask)                                  # the taker fee per contract
             ev = round(p / cost - 1, 4)
             if ev >= cushion:
                 out.append({**base, "kind": "ml", "team": team, "venue": "Kalshi",
                             "price": odds_math.prob_to_american(cost), "p": p, "ev": ev, "ask": ask,
-                            "value_at": (rs.get("value_at") or {}).get(team)})
+                            "value_at": value_at.get(team)})
     out.sort(key=lambda r: -r["ev"])
     return out
 
 
 def _slip_game(g: dict) -> dict:
     """One live game as the bet slip needs it: the Research % (the market's where nothing moved it) on
-    each moneyline side, the main spread and the main total."""
+    each moneyline side, the main spread and the main total. time_tbd is true while ESPN's kickoff_iso
+    is only a date-only placeholder, not a confirmed start."""
     rs = g.get("research") or {}
     m = g.get("market") or (0, 0, 0)
     out = {"dedup": g["dedup"], "team_a": g["team_a"], "team_b": g["team_b"], "kickoff_iso": g.get("kickoff_iso"),
+           "time_tbd": bool(g.get("time_tbd")),
            "ml": rs.get("ml") or {g["team_a"]: m[0], g["team_b"]: m[2]}}
     for leg in g.get("legs") or []:
         p = leg.get("research_prob") if leg.get("research_prob") is not None else leg.get("prob")
@@ -1541,17 +1723,16 @@ def _corners_board(matchups: list[dict], rates: dict, corner_lines: dict, model)
 
 def _corner_paper_row(r: dict) -> dict | None:
     """A +EV corner read becomes a priced bankroll entry (settles + tracks like any other bet).
-    Dedup is per-game-per-day (ignores the moving line/side) so an intraday line move can't double-log
+    Dedup is per game, keyed on its date and not the moving line/side, so a line move can't double-log
     the same game. Stake matches the Best Bets card (EV tier). No CLV on corners → no pick_fair_prob,
     so the ledger shows hit-rate/ROI like props rather than a perpetual 'close —'."""
     if not r.get("selection") or r.get("line") is None or r.get("price") is None:
         return None
-    today = time.strftime("%Y-%m-%d")
     return {
         "match": r["event"], "archetype": "total_corners", "selection": r["selection"],
         "commence_time": r.get("commence_time"), "pick_price_decimal": r.get("price"),
         "model_prob": r.get("model_prob"),   # model P(side hits) — for calibration/Brier, not CLV
-        "dedup_key": f"{today}:corners:{r['event']}",
+        "dedup_key": f"{paper.game_day(r.get('commence_time'))}:corners:{r['event']}",
         "stake_units": 1.5 if r.get("ev", 0) >= 0.08 else 1.0,
     }
 
@@ -1709,7 +1890,13 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
     every group game already decided. The HEADLINE per row is the de-vigged Polymarket price (the sharp,
     vig-free probability); the model rides alongside as an openly-conservative second opinion (a simple
     ratings model under-separates elite teams, so in the open knockout it systematically trails the market
-    on favorites, which is model caution rather than betting value). Runs on a thread (sim is a few sec)."""
+    on favorites, which is model caution rather than betting value). Runs on a thread (sim is a few sec).
+
+    Knockout results come from the settled Model Ledger as well as the ESPN window, which ages out (by
+    October it no longer reached July, and the board went back to projecting Germany as champion). Once
+    the final is decided the board is the tournament's record: `final` holds the result, `archived` is
+    true, and every row is marked resolved (did the team make that stage) with the model-vs-market gap
+    dropped, since a settled market has no value left to read."""
     live = _reconstruct_groups_from_results(results)
     disk = _load_groups_disk()
     disk = disk if _valid_field(disk) else {}     # ignore the old letter-keyed / malformed cache
@@ -1727,8 +1914,16 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
     covered = len(field)
     market_by_type = {m.market_type: m for m in markets if m.market_type}
     have_market = any(mt in market_by_type for _, mt, _, _, _ in _FUTURES_STAGES)
-    if covered < 12 or not model or not have_market:
-        return {"rows": [], "groups_covered": covered, "sims": 0, "games_locked": 0}
+    if covered < 12:
+        return {"rows": [], "groups_covered": covered, "sims": 0, "games_locked": 0,
+                "final": None, "archived": False}
+    ledger = _ledger_results()
+    if not model or not have_market:
+        # the results need no market: a finished tournament keeps its bracket after the futures close
+        bracket = _build_bracket({}, model, results, field, ledger)
+        final = bracket.pop("final")
+        return {"rows": [], "groups_covered": covered, "sims": 0, "games_locked": 0,
+                "bracket": bracket, "final": final, "archived": final is not None}
 
     def lambdas(a, b):
         return model.expected_goals(a, b)
@@ -1742,7 +1937,7 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
     real_draw = all(t in field_teams for t in bracket_order)   # use the actual draw when it matches the field
     sim = tournament.simulate(field, lambdas, strength, played=played,
                               bracket=(bracket_order if real_draw else None),
-                              ko_played=(_knockout_winners(results, field) if real_draw else None),
+                              ko_played=(_knockout_winners(results, field, ledger) if real_draw else None),
                               n=config.TOURNAMENT_SIMS, seed=config.TOURNAMENT_SEED)
 
     rows = []
@@ -1757,17 +1952,26 @@ def _compute_futures(markets: list[Market], model, results: list[dict] | None = 
             md = sim.get(team, {}).get(simkey)
             if md is None:
                 continue
-            rows.append({"team": team, "kind": label, "_sort": (order, -mk),
+            rows.append({"team": team, "kind": label, "_sort": (order, -mk), "_stage": simkey,
                          "market_pct": round(mk * 100, 1),     # de-vigged Polymarket - the headline
                          "model_pct": round(md * 100, 1),      # conservative second opinion
-                         "gap_pp": round((md - mk) * 100, 1)}) # model minus market, shown neutral
+                         "gap_pp": round((md - mk) * 100, 1),  # model minus market, shown neutral
+                         "resolved": False, "won": None})      # set below once the final is decided
+    bracket = _build_bracket(devig_by_stage, model, results, field, ledger)
+    final = bracket.pop("final")
+    if final:
+        # every stage is decided once the final is: each row is a result, not a price to read for value
+        reached = _stage_reached(bracket)
+        for r in rows:
+            r.update(resolved=True, won=r["team"] in reached.get(r["_stage"], ()), gap_pp=None)
     rows.sort(key=lambda r: r["_sort"])
     for r in rows:
         r.pop("_sort", None)
+        r.pop("_stage", None)
     shown = {r["team"] for r in rows}
     return {"rows": rows, "groups_covered": covered, "sims": config.TOURNAMENT_SIMS,
             "games_locked": len(played), "records": _team_records(results, shown),
-            "bracket": _build_bracket(devig_by_stage, model, results, field)}
+            "bracket": bracket, "final": final, "archived": final is not None}
 
 
 # WC2026 knockout draw (Round of 32, top to bottom; the tree is adjacent pairs feeding each next round).
@@ -1783,37 +1987,165 @@ _BRACKET_ROUNDS = [("Round of 32", "reach_r16"), ("Round of 16", "reach_qf"),
                    ("Quarter-finals", "reach_sf"), ("Semi-finals", "win_cup"), ("Final", "win_cup")]
 
 
-def _knockout_winners(results: list[dict] | None, field: dict) -> dict:
-    """{frozenset({a,b}): winner_key} for finished cross-group (knockout) games, penalties-aware."""
+def _ledger_results() -> list[dict]:
+    """The active sport's settled Model Ledger rows: the permanent record of every graded game, where the
+    ESPN results window ages out. A ledger read problem costs the bracket its older results, never the
+    futures board."""
+    try:
+        return [r for r in paper.list_forecasts() if r.get("status") == "settled"]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[aggregator] ledger results unavailable to the bracket: {exc}")
+        return []
+
+
+def _within_a_day(x: str, y: str) -> bool:
+    try:
+        return abs((date.fromisoformat(x[:10]) - date.fromisoformat(y[:10])).days) <= 1
+    except ValueError:
+        return x == y
+
+
+def _knockout_meetings(results: list[dict] | None, ledger: list[dict] | None, field: dict) -> dict:
+    """{frozenset({a, b}): {date, goals, winner}} for every knockout game on record. The settled Model
+    Ledger keeps every graded game for good, where the ESPN results window ages out (by October it no
+    longer reached July). ESPN still adds what the ledger lacks, a game that never locked, and its
+    penalties-aware `winner` flag, which the ledger does not record. The same game in both (their dates
+    can sit a day apart: a US-local scoreboard against a market date) merges into one meeting. Group
+    games are left out: a cross-group pair only meets in the knockouts, and any game from the first
+    Round of 32 date on is a knockout game, which keeps a same-group pair's knockout meeting even when
+    its group game is not on record (the ledger only opened in the knockouts)."""
     team_group = {t: g for g, ts in (field or {}).items() for t in ts}
+    seen: dict = {}
+
+    def add(pair, day, goals, winner):
+        games = seen.setdefault(pair, [])
+        same = next((g for g in games if _within_a_day(g["date"], day)), None)
+        if same:
+            same["winner"] = same["winner"] or winner
+        else:
+            games.append({"date": day, "goals": goals, "winner": winner})
+
+    for r in ledger or []:
+        if r.get("status") == "settled" and r.get("actual_a") is not None and r.get("actual_b") is not None:
+            add(frozenset((r["team_a"], r["team_b"])), (r.get("commence_time") or "")[:10],
+                {r["team_a"]: r["actual_a"], r["team_b"]: r["actual_b"]}, None)
+    for g in results or []:
+        goals = g.get("goals") or {}
+        if len(goals) == 2:
+            add(frozenset(goals), g.get("date") or "", dict(goals), g.get("winner"))
+    r32 = {frozenset(p) for p in _BRACKET_R32}       # never a group pairing, so these date the knockouts
+    starts = [g["date"] for pair, games in seen.items() if pair in r32 for g in games if g["date"]]
+    ko_start = min(starts) if starts else None
     out: dict = {}
-    for game in results or []:
-        goals = game.get("goals") or {}
-        teams = [t for t in goals if t in team_group]
-        if len(teams) != 2 or team_group.get(teams[0]) == team_group.get(teams[1]):
-            continue
-        a, b = teams
-        w = game.get("winner")
-        if w not in (a, b):
-            if goals.get(a) == goals.get(b):
-                continue
-            w = a if goals[a] > goals[b] else b
-        out[frozenset((a, b))] = w
+    for pair, games in seen.items():
+        a, b = tuple(pair)
+        cross = a in team_group and b in team_group and team_group[a] != team_group[b]
+        knockout = [g for g in games if cross or (ko_start and g["date"] >= ko_start)]
+        if knockout:
+            out[pair] = max(knockout, key=lambda g: g["date"])
     return out
 
 
-def _build_bracket(devig: dict, model, results: list[dict] | None, field: dict) -> dict:
+def _decide_knockouts(meetings: dict) -> dict:
+    """{frozenset({a, b}): winner} for every decided tie of the real draw, walking it a round at a time.
+    A tie won in 90 minutes or extra time goes by the score, and a level one by ESPN's penalties flag
+    while ESPN still has the game. The ledger grades a level knockout as a draw (penalties are flagged,
+    never recorded), and a tie can be missing from it altogether (Germany v Paraguay never locked), so
+    otherwise the winner is the side that PLAYED ON: the one with a later game against a team from
+    outside this tie's part of the draw. Before the semi-finals only the winner has one, since the loser
+    goes home. A beaten semi-finalist plays again, in the third-place match, so a level or missing semi
+    goes by the other semi: the side that met its winner won, and the side that met its loser lost.
+    When that semi is open too, the side in the later game won (the final is played after the
+    third-place match, so this needs both games on record). A tie the record can not tell apart stays
+    undecided; it is never guessed."""
+    opponents: dict = {}                             # team -> [(opponent, date)] over its knockout games
+    for pair, m in meetings.items():
+        a, b = tuple(pair)
+        opponents.setdefault(a, []).append((b, m["date"]))
+        opponents.setdefault(b, []).append((a, m["date"]))
+    winners: dict = {}
+    ties = [(a, b, {a, b}) for a, b in _BRACKET_R32]   # (side, side, every team that could reach the tie)
+    while ties:
+        semis = len(ties) == 2
+        won, on = [], []
+        for a, b, part in ties:
+            m = meetings.get(frozenset((a, b))) if a and b else None
+            w = None
+            if m:
+                ga, gb = m["goals"].get(a), m["goals"].get(b)
+                if ga is not None and gb is not None and ga != gb:
+                    w = a if ga > gb else b
+                elif m.get("winner") in (a, b):
+                    w = m["winner"]
+            later = {x: [(o, d) for o, d in opponents.get(x, []) if o not in part] for x in (a, b) if x}
+            if w is None and a and b and not semis:
+                sides = [x for x in (a, b) if later[x]]
+                w = sides[0] if len(sides) == 1 else None
+            won.append(w)
+            on.append(later)
+        for i, (a, b, _part) in enumerate(ties):
+            if not semis or won[i] or not (a and b):
+                continue
+            sib_a, sib_b, _ = ties[1 - i]
+            sib_w = won[1 - i]
+            if sib_w:
+                sib_l = sib_b if sib_w == sib_a else sib_a
+                beat = [x for x in (a, b) if any(o == sib_w for o, _ in on[i][x])]       # played the final
+                lost = [x for x in (a, b) if any(o == sib_l for o, _ in on[i][x])]       # third-place match
+                if len(beat) == 1:
+                    won[i] = beat[0]
+                elif len(lost) == 1:
+                    won[i] = b if lost[0] == a else a
+            elif on[i][a] and on[i][b]:
+                last = {x: max(d for _, d in on[i][x]) for x in (a, b)}
+                if last[a] != last[b]:
+                    won[i] = a if last[a] > last[b] else b
+        for (a, b, _part), w in zip(ties, won):
+            if w:
+                winners[frozenset((a, b))] = w
+        if len(ties) == 1:
+            break
+        ties = [(won[i], won[i + 1], ties[i][2] | ties[i + 1][2]) for i in range(0, len(ties), 2)]
+    return winners
+
+
+def _knockout_winners(results: list[dict] | None, field: dict, ledger: list[dict] | None = None) -> dict:
+    """{frozenset({a,b}): winner_key} for every decided knockout tie (see _decide_knockouts)."""
+    return _decide_knockouts(_knockout_meetings(results, ledger, field))
+
+
+def _ledger_names(ledger: list[dict] | None) -> dict:
+    """{team_key: display name}, read off the ledger's 'Spain vs Argentina' match labels."""
+    names: dict = {}
+    for r in ledger or []:
+        for part in _VS_RE.split(r.get("match") or ""):
+            k = normalize_team(part)
+            if k and k in (r.get("team_a"), r.get("team_b")):
+                names.setdefault(k, part.strip())
+    return names
+
+
+def _build_bracket(devig: dict, model, results: list[dict] | None, field: dict,
+                   ledger: list[dict] | None = None) -> dict:
     """The real knockout bracket (R32 -> Final) with the de-vigged advance % per team and the model +
-    market head-to-head per tie. A decided slot uses the actual advancer (penalties-aware); an undecided
-    slot projects the de-vigged favorite (the client dims it). Powers the bracket visualization."""
-    winners = _knockout_winners(results, field)
+    market head-to-head per tie. A decided slot uses the actual advancer (see _decide_knockouts), with
+    the score when it is on record. An undecided slot projects the de-vigged favorite (the client dims
+    it), but only when the market tells the two apart: with both prices missing or equal (a settled
+    market floors every beaten team at 0.1%) the slot stays open (null) rather than going to whichever
+    side is listed first, which is how a finished tournament came to show Germany as champion. `final`
+    is the decided final, or None until it is played. Powers the bracket visualization."""
+    meetings = _knockout_meetings(results, ledger, field)
+    winners = _decide_knockouts(meetings)
 
     def advance(a, b, reach):
-        w = winners.get(frozenset((a, b)))
+        w = winners.get(frozenset((a, b))) if a and b else None
         if w:
             return w
         rmap = devig.get(reach, {})
-        return a if rmap.get(a, 0) >= rmap.get(b, 0) else b
+        pa, pb = (rmap.get(a) or 0) if a else 0, (rmap.get(b) or 0) if b else 0
+        if pa == pb:
+            return None                              # both missing or level: the market has no favorite
+        return a if pa > pb else b
 
     rounds = []
     matchups = list(_BRACKET_R32)
@@ -1821,26 +2153,52 @@ def _build_bracket(devig: dict, model, results: list[dict] | None, field: dict) 
         rmap = devig.get(reach, {})
         out_matchups, nxt = [], []
         for a, b in matchups:
-            mp = model.match_probs(a, b) if model else None
+            mp = model.match_probs(a, b) if (model and a and b) else None
             mdl_a = (mp[a] + 0.5 * mp["draw"]) if mp else None
-            pa, pb = rmap.get(a), rmap.get(b)
+            pa, pb = (rmap.get(a) if a else None), (rmap.get(b) if b else None)
             mkt_a = pa / (pa + pb) if (pa and pb) else None
+            m = meetings.get(frozenset((a, b))) if a and b else None
+            w = winners.get(frozenset((a, b))) if a and b else None
             out_matchups.append({
                 "a": a, "b": b,
                 "a_pct": round(pa * 100) if pa is not None else None,
                 "b_pct": round(pb * 100) if pb is not None else None,
                 "mkt_a": round(mkt_a * 100) if mkt_a is not None else None,
                 "mdl_a": round(mdl_a * 100) if mdl_a is not None else None,
-                "winner": winners.get(frozenset((a, b))),
+                "winner": w,
+                "score_a": m["goals"].get(a) if m else None,     # 90 minutes plus extra time
+                "score_b": m["goals"].get(b) if m else None,
+                "pens": (m["goals"].get(a) == m["goals"].get(b)) if (m and w) else None,
             })
             nxt.append(advance(a, b, reach))
         rounds.append({"name": name, "matchups": out_matchups})
         matchups = [(nxt[i], nxt[i + 1]) for i in range(0, len(nxt) - 1, 2)]
-    champ = None
+    champ = final = None
     if rounds and rounds[-1]["matchups"]:
         f = rounds[-1]["matchups"][0]
         champ = advance(f["a"], f["b"], "win_cup")
-    return {"rounds": rounds, "champion": champ}
+        if f["winner"]:
+            w = f["winner"]
+            lo = f["b"] if w == f["a"] else f["a"]
+            names = _ledger_names(ledger)
+            m = meetings.get(frozenset((f["a"], f["b"])))
+            final = {"winner": w, "runner_up": lo, "winner_name": names.get(w), "runner_up_name": names.get(lo),
+                     "score_winner": m["goals"].get(w) if m else None,
+                     "score_runner_up": m["goals"].get(lo) if m else None,
+                     "date": m["date"] if m else None, "pens": f["pens"]}
+    return {"rounds": rounds, "champion": champ, "final": final}
+
+
+def _stage_reached(bracket: dict) -> dict:
+    """{sim stage key: teams that reached it}, read off a decided bracket: a team reached the round of 16
+    if it plays in it (and so on), and the cup went to the champion."""
+    rounds = bracket.get("rounds") or []
+
+    def playing(k):
+        return {t for mu in (rounds[k]["matchups"] if k < len(rounds) else []) for t in (mu["a"], mu["b"]) if t}
+
+    return {"reach_r16": playing(1), "reach_qf": playing(2), "reach_sf": playing(3),
+            "win_cup": {bracket["champion"]} if bracket.get("champion") else set()}
 
 
 def _team_records(results: list[dict] | None, teams: set) -> dict:
@@ -1929,7 +2287,7 @@ async def futures_scenario(pins: list[dict]) -> dict:
     if not model or not _valid_field(field):
         return {"deltas": [], "pins": []}
     results = await get_results()
-    decided = _knockout_winners(results, field)
+    decided = _knockout_winners(results, field, _ledger_results())
     return await asyncio.to_thread(_scenario_deltas, field, model, decided, pins)
 
 
@@ -2054,7 +2412,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # Isolated like get_futures: the Model Ledger is an optional second opinion, so a DB/settlement error
     # here must degrade only the ledger, never take down Best Bets / Research / Futures / Track Record.
     # Anchor-only sports (no model) run the ledger MARKET-only: the de-vigged line locks and grades.
-    research_by_pair: dict = {}
+    research_by_game: dict = {}
     if config.FORECAST_ENABLED:
         try:
             now_utc = datetime.now(timezone.utc)
@@ -2092,7 +2450,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line
                                          now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            paper.settle_forecasts(results, team_stats)
+            # the same results sweep notes every game ESPN canceled or postponed, so its locked row voids now
+            paper.settle_forecasts(results, team_stats, called_off=espn.CALLED_OFF, listed=espn.LISTED)
             try:
                 mybets.settle()                             # the owner's logged bets grade off the same finals
             except Exception as exc:  # noqa: BLE001  (a bet-log problem must never cost the ledger a cycle)
@@ -2104,6 +2463,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             upcoming = [{**c, "model": fboard[c["dedup_key"]]["model"],
                          "market": fboard[c["dedup_key"]]["market"],
                          "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
+                         "time_tbd": fboard[c["dedup_key"]]["time_tbd"],   # kickoff_iso is only a date
                          "sources": fboard[c["dedup_key"]]["sources"],
                          "legs": fboard[c["dedup_key"]]["legs"],
                          "research": fboard[c["dedup_key"]].get("research")}
@@ -2127,6 +2487,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             live = [{"sport": sports.active().key, "dedup": c["dedup_key"], "team_a": c["team_a"],
                      "team_b": c["team_b"],
                      "date": c["commence_time"], "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
+                     "time_tbd": fboard[c["dedup_key"]]["time_tbd"],
                      "market": fboard[c["dedup_key"]]["market"], "legs": fboard[c["dedup_key"]]["legs"],
                      "research": fboard[c["dedup_key"]].get("research"),
                      "kalshi_ask": fboard[c["dedup_key"]].get("kalshi_ask")}
@@ -2161,11 +2522,12 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)
-                # the live research per game, so the Best Bets cards carry it too
+                # the live research per game, so the Best Bets cards carry it too (keyed by pair AND date:
+                # a pair repeats inside the horizon, and each game has its own research)
                 for c in fcands:
                     rs = fboard[c["dedup_key"]].get("research")
                     if rs and not fboard[c["dedup_key"]]["missed"]:
-                        research_by_pair.setdefault(frozenset((c["team_a"], c["team_b"])), rs)
+                        research_by_game.setdefault((frozenset((c["team_a"], c["team_b"])), c["commence_time"]), rs)
         except Exception as exc:  # noqa: BLE001
             print(f"[aggregator] model_ledger skipped: {exc}")
 
@@ -2192,7 +2554,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
         v["smart_money"] = (b or {}).get("smart_money_match")  # whale tiebreaker, shown in Research
         memory.adjust(v, b or {}, cal_stats)   # gated; provably inert until buckets fill
     picks_board["calibration"] = memory.panel(cal_stats)
-    picks_board["best_bets"] = _best_bets(picks_board, best, research_by_pair)
+    picks_board["best_bets"] = _best_bets(picks_board, best, research_by_game, model_loaded=model is not None)
     picks_board["fades"] = _fades(picks_board)
     pod, parlay = _daily_card(picks_board["ai"], bundles)
     picks_board["picks_of_day"] = pod

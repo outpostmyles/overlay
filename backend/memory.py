@@ -61,6 +61,8 @@ def compute() -> dict:
     for p in paper.list_picks():
         for key in _pick_buckets(p):
             d = acc.setdefault(key, {"clv": [], "settled": 0, "wins": 0, "fairs": []})
+            # clv_pct is only set against a real pre-game close: a close taken in play, or pinned at the
+            # top of the book, carries the result, and learning from it would reward picks for winning
             if p.get("clv_pct") is not None:
                 d["clv"].append(p["clv_pct"])
             if p.get("status") in ("won", "lost"):

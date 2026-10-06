@@ -14,6 +14,13 @@ Ticker shape: KXNHLGAME-26OCT06CARMTL. Unlike MLB there is no start time in the 
 carry a bare date. That is safe because a club never plays twice in one day, so there are no
 doubleheaders to tell apart. The pair repeats across a season, though, so keys stay date-qualified.
 
+Liquidity (probed live, Oct 6 2026): on game day every moneyline and every total rung is a cent or two
+wide. Further out the moneylines run 2 to 10 cents wide, but two days out most total ladders are nearly
+empty (bids near 0.02 and asks near 0.84 on most rungs; some games have one tight rung, some none). So the
+main total comes only from tight rungs (aggregator._main_line), and max_lock_spread keeps a moneyline wider
+than 10c off the ledger, as in college football. No listed game was wider than 10c when the gate went in;
+it is there for the day one is.
+
 Deliberately out of Phase 1, each for a measured reason:
 - 1st period winner (KXNHL1P): a 3-way market like MLB's first five, but thin (29c bid / 38c ask) and
   honestly priced near a three-way coin flip, which the placeholder gate correctly rejects as not sharp.
@@ -94,5 +101,6 @@ NHL = register(SportAdapter(
     aliases=_ALIASES,
     results_window_days=10,            # daily slates, like MLB: a tight window keeps the ESPN sweep small
     pair_only_key=False,               # the pair repeats across a season: key on pair + date
+    max_lock_spread=0.10,              # a moneyline book wider than 10c is not a sharp line yet
     research="hockey",                 # moneyline factors tracked first (backend/research.py)
 ))

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from . import propread
+from . import propread, sports
 from .matching import normalize_team
 from .model import parlay as parlaymodel
 from .model import props as propmodel
@@ -30,6 +30,15 @@ def _days_out(commence_time) -> int | None:
         return (date.fromisoformat(str(commence_time)[:10]) - date.today()).days
     except ValueError:
         return None
+
+
+def slate_horizon(cfg) -> int:
+    """How many days past today the favorites list reaches. A daily sport looks a few days out (the global
+    SLATE_HORIZON_DAYS); a weekly one sets its own on the adapter, because four days from a Tuesday stops
+    short of Sunday and left the NFL board showing Thursday's game alone."""
+    own = sports.active().slate_horizon_days
+    return own if own is not None else getattr(cfg, "SLATE_HORIZON_DAYS", 4)
+
 
 # stat types that map to the user's archetypes (everything else is filtered out)
 _SHOT_STATS = ("Shots", "Shots On Target")
@@ -143,8 +152,8 @@ def generate(markets: list[Market], props: list[dict], model, cfg, smart_money: 
             }
             favorites.append(fav)
             fav_keys[top.key] = fav
-    # daily bettor: keep today + the next few days, soonest first (not next week's chalk)
-    horizon = getattr(cfg, "SLATE_HORIZON_DAYS", 4)
+    # keep today + the sport's horizon (a few days daily, the week for football), soonest first
+    horizon = slate_horizon(cfg)
     favorites = [f for f in favorites
                  if f["days_out"] is None or 0 <= f["days_out"] <= horizon]
     favorites.sort(key=lambda f: (f["days_out"] if f["days_out"] is not None else 999, -f["fair_prob"]))

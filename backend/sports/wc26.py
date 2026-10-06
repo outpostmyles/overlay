@@ -51,4 +51,5 @@ WC26 = register(SportAdapter(
     aliases={},                    # the global soccer map in matching.py already covers the WC
     results_window_days=40,        # the whole tournament (futures field reconstruction needs it)
     pair_only_key=True,            # a WC pair plays at most once in the slate; dates skew UTC/US-local
+    archived=True,                 # the final was played 2026-07-19: the board is the tournament's record
 ))

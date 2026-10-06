@@ -104,6 +104,7 @@ CFB = register(SportAdapter(
     capabilities=frozenset(),
     aliases=_SchoolNames(_EXPLICIT),
     results_window_days=10,
+    slate_horizon_days=6,              # a weekly sport: six days ahead reaches every game of the week once
     pair_only_key=False,
     team_filter=POWER4_ND,
     espn_team_field="location",

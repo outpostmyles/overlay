@@ -48,6 +48,15 @@ def _prob(dollars) -> float | None:
         return None
 
 
+def book_width(bid: float | None, ask: float | None) -> float:
+    """Ask minus bid on one Kalshi book, reading a missing bound as the edge it stands for. Kalshi quotes an
+    empty side as a bid of 0.00 or an ask of 1.00, which _prob turns into None, so a 99c favorite (bid 0.99,
+    ask 1.00) and its 1c opponent (bid 0.00, ask 0.01) are one-cent books, not books with no price. Reading
+    them as missing kept Ohio State v Maryland off the ledger while it led Best Bets. Rounded so a 0.45/0.55
+    book measures 0.10 against a 0.10 gate, not 0.10000000000000009."""
+    return round((1.0 if ask is None else ask) - (0.0 if bid is None else bid), 4)
+
+
 class _Rows(list):
     """A series' markets, and whether every page arrived (a partial pull is not the market)."""
     ok = True
@@ -149,9 +158,9 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dic
     label = _clean(m.get("yes_sub_title") or m.get("title") or "").strip()
     line = m.get("floor_strike")
 
-    def q(prob, mid):
+    def q(prob, mid, q_bid, q_ask):
         return Quote(source="kalshi", source_type="prediction_market", price_decimal=1.0 / prob,
-                     implied_prob=prob, mid_prob=mid, fee=config.KALSHI_FEE_COEF,
+                     implied_prob=prob, mid_prob=mid, fee=config.KALSHI_FEE_COEF, bid=q_bid, ask=q_ask,
                      volume=m.get("volume_fp"), link=f"https://kalshi.com/markets/{series.lower()}")
 
     ev_ticker = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
@@ -167,13 +176,17 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dic
         if not pair or not cover or cover not in pair:
             return None
         group = f"{group}|{cover}"
+    # the quotes carry the book so the main-line pick can tell a tight rung from a thin one; it reads the
+    # over (yes) side, and the under (no) side is the same book mirrored: bid 1 - the yes ask, ask 1 - bid
+    no_bid, no_ask = ((1.0 - ask) if ask else None), ((1.0 - bid) if bid else None)
     return Market(
         market_id=f"kalshi:{tkr}",
         event=_clean(m.get("title") or "").rstrip("?").strip(),
         market_type=mtype,
         selections=[
-            Selection(key=f"over_{line}", label=label, quotes=[q(over, mid_over)]),
-            Selection(key=f"under_{line}", label=f"Under ({label})", quotes=[q(under, 1.0 - mid_over)]),
+            Selection(key=f"over_{line}", label=label, quotes=[q(over, mid_over, bid, ask)]),
+            Selection(key=f"under_{line}", label=f"Under ({label})",
+                      quotes=[q(under, 1.0 - mid_over, no_bid, no_ask)]),
         ],
         commence_time=kalshi_ticker_date(ev_ticker),
         group=group,

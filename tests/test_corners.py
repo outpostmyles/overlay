@@ -3,7 +3,6 @@ import importlib
 import json
 import os
 import tempfile
-import time
 
 from backend import config
 from backend.model import corners
@@ -91,8 +90,8 @@ def test_corner_paper_row_dedup_and_stake():
     base = {"event": "Spain vs Saudi Arabia", "line": 9.5, "price": 1.8, "selection": "Over 9.5 corners",
             "commence_time": "2026-06-21T16:00:00Z", "model_prob": 0.62, "ev": 0.117, "confidence": "high"}
     row = aggregator._corner_paper_row(base)
-    # dedup is per-game-per-day, independent of the moving line/side (no intraday double-log)
-    assert row["dedup_key"] == time.strftime("%Y-%m-%d") + ":corners:Spain vs Saudi Arabia"
+    # dedup is per game (its date, not the day it was logged), independent of the moving line/side
+    assert row["dedup_key"] == "2026-06-21:corners:Spain vs Saudi Arabia"
     assert "pick_fair_prob" not in row                       # corners have no CLV → no fair-prob entry
     assert row["stake_units"] == 1.5                         # ev >= 0.08 → strong, matches the card tier
     assert aggregator._corner_paper_row(dict(base, ev=0.05))["stake_units"] == 1.0

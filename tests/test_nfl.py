@@ -224,7 +224,7 @@ def test_spread_payload_names_its_covering_team_from_the_ticker(monkeypatch):
 def test_spread_leg_takes_the_main_line_and_grades_off_the_margin(monkeypatch):
     monkeypatch.setattr(config, "SPORT", "nfl")
     dal, tb = "dallas cowboys", "tampa bay buccaneers"
-    lines = [(dal, 3.5, 0.68), (dal, 7.5, 0.515), (dal, 10.5, 0.42), (tb, 1.5, 0.175)]
+    lines = [(dal, 3.5, 0.68, 0.01), (dal, 7.5, 0.515, 0.01), (dal, 10.5, 0.42, 0.01), (tb, 1.5, 0.175, 0.01)]
     leg = next(l for l in _board_props([], spreads=lines) if l["key"] == "spread")
     assert (leg["team"], leg["opp"], leg["line"], leg["side"]) == (dal, tb, 7.5, "cover")
     paper = _fresh_paper()

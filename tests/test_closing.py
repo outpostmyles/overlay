@@ -111,3 +111,55 @@ def test_forecast_close_holds_at_first_pitch_even_if_board_forgets_kickoff(monke
     # 20 minutes into the game, the board (missing its kickoff) still says not missed
     paper.capture_forecast_close({key: {**base, "market": (0.88, 0.0, 0.12)}}, "2026-07-22T02:00:00Z")
     assert paper.list_forecasts()[0]["closing_a"] == 0.47          # in-play price refused
+
+
+def _closed(paper, fair, close, status="won", closing_at=None, locked="2026-06-30 22:58:57"):
+    with paper._conn() as c:
+        return c.execute(
+            "INSERT INTO paper_picks (logged_at, match, archetype, selection, commence_time, pick_fair_prob, "
+            "pick_price_decimal, closing_fair_prob, status, closing_locked_at, closing_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("2026-06-29 03:13:55", "France vs Sweden", "favorite_ml", "France ML", "2026-06-30", fair,
+             round(1 / fair, 3), close, status, locked, closing_at)).lastrowid
+
+
+def test_capture_stamps_the_close_as_pre_start():
+    paper = _fresh_paper()
+    pid = _pick(paper, "A vs B", "2026-07-21", "A ML")
+    paper.capture_closing({("A vs B", "2026-07-21"): ("A ML", 0.62)})
+    with paper._conn() as c:
+        stamp = c.execute("SELECT closing_at FROM paper_picks WHERE id=?", (pid,)).fetchone()[0]
+    assert stamp and stamp.endswith("Z")
+    p = paper.list_picks()[0]
+    assert (p["close_flag"], p["clv_pct"]) == (None, 3.33)
+
+
+def test_track_record_ignores_in_play_and_pinned_closes(monkeypatch):
+    """The WC headline (Avg CLV +15.39%, beat close 73.9%) came from closes written during or after the
+    game. Only a close stamped by the pre-start capture, and not pinned at the top of the book, counts."""
+    monkeypatch.setattr(config, "SPORT", "wc26")
+    paper = _fresh_paper()
+    pinned = _closed(paper, 0.781, 0.989)                            # France v Sweden: frozen 22:58, won
+    in_play = _closed(paper, 0.801, 0.653, status="lost")            # unstamped: written until settlement
+    stamped_pin = _closed(paper, 0.90, 0.99, closing_at="2026-10-06T16:00:00Z")
+    void = _closed(paper, 0.60, 0.70, status="void", closing_at="2026-10-06T16:00:00Z")
+    good = _closed(paper, 0.60, 0.63, status="pending", closing_at="2026-10-06T16:00:00Z", locked=None)
+    flags = {p["id"]: (p["close_flag"], p["clv_pct"]) for p in paper.list_picks()}
+    assert flags[pinned] == ("clamp", None) and flags[stamped_pin] == ("clamp", None)
+    assert flags[in_play] == ("untimed", None) and flags[void] == ("void", None)
+    assert flags[good] == (None, 5.0)
+    s = paper.summary()
+    for agg in (s["overall"], s["by_archetype"]["favorite_ml"]):
+        assert (agg["clv_tracked"], agg["avg_clv"], agg["beat_close_pct"]) == (1, 5.0, 100.0)
+    assert s["overall"]["settled"] == 3                              # W/L grading is untouched
+
+
+def test_calibration_memory_never_learns_from_an_in_play_close(monkeypatch):
+    monkeypatch.setattr(config, "SPORT", "wc26")
+    paper = _fresh_paper()
+    from backend import memory
+    for _ in range(25):                                              # enough to clear the gate if counted
+        _closed(paper, 0.80, 0.989)
+    _closed(paper, 0.60, 0.63, status="pending", closing_at="2026-10-06T16:00:00Z", locked=None)
+    st = memory.compute()[("archetype", "favorite_ml")]
+    assert st["n_clv"] == 1 and st["metric"] != "clv"

@@ -94,10 +94,20 @@ async def _scoreboard_events(client: httpx.AsyncClient, yyyymmdd: str) -> dict:
     return out
 
 
+def tbd_key(pair: frozenset, date_iso: str) -> tuple:
+    """The kickoff-map key that marks a game whose ESPN start is a date-only placeholder. It rides in the
+    same map as the start times, so it is cached, pruned and refreshed exactly like them."""
+    return (pair, date_iso, "tbd")
+
+
 async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
     """{frozenset(team_key, team_key): kickoff_iso} for the given dates. ESPN's scoreboard carries the
     exact kickoff time (Kalshi/our markets only know the date), so this is what lets the ledger order
     same-day games by who actually plays first. dates are 'YYYYMMDD'.
+
+    Not every listed time is real: a college game waiting on its TV window is filed at local midnight
+    (04:00Z) with competitions[0].timeValid false. Its start is still returned, for ordering, and
+    tbd_key(pair, date) is set beside it, so the ledger never locks or misses a game off a placeholder.
 
     The same scoreboard also carries each game's venue, roof, neutral-site and conference flags; those
     are kept in GAME_CONTEXT under the same (pair, date) key for the research layer, at no extra call."""
@@ -119,6 +129,11 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
                     # date-qualified key for daily sports: a series repeats the same pair across days,
                     # so the pair alone would smear one game's start time over the whole series
                     out[(keys, _iso(d))] = ev["date"]
+                    # the marker follows the start it describes: a doubleheader's later listing replaces both
+                    if ev["competitions"][0].get("timeValid") is False:
+                        out[tbd_key(keys, _iso(d))] = True
+                    else:
+                        out.pop(tbd_key(keys, _iso(d)), None)
                     GAME_CONTEXT[(keys, _iso(d))] = game_context(ev)
             except (KeyError, IndexError, TypeError):
                 continue
@@ -406,6 +421,40 @@ def _box_stats(summary: dict) -> dict:
     return out
 
 
+# (pair, date) -> {start_iso: ESPN status} for the games the results sweep found canceled or postponed.
+# Each sweep rebuilds a date from its fresh scoreboard, and a date holding such a game is never marked
+# done (the game never completes), so it is re-read until it leaves the window. settle_forecasts voids
+# the forecast locked on that start at once: a canceled MLB game sat "awaiting result" for 9 days
+# waiting on the window's long-stop. Suspended games are left out on purpose, they resume and finish.
+CALLED_OFF: dict = {}
+_CALLED_OFF_STATUSES = {"STATUS_CANCELED", "STATUS_POSTPONED"}
+# Every start a re-read scoreboard lists, {(pair, date): {start_iso: completed}}. Settlement needs the
+# games that are NOT final too: a doubleheader's nightcap must wait while game 1 is the only final,
+# even when ESPN has nudged game 1's start toward it, and a lone game delayed hours past its frozen
+# start is still that pair's only game that day.
+LISTED: dict = {}
+
+
+def _record_called_off(date_iso: str, events: list) -> None:
+    """Replace one scoreboard date's entries in CALLED_OFF and LISTED with what that scoreboard says now."""
+    for book in (CALLED_OFF, LISTED):
+        for k in [k for k in book if k[1] == date_iso]:
+            del book[k]
+    for ev in events:
+        stype = (ev.get("status") or {}).get("type") or {}
+        if not ev.get("date"):
+            continue
+        try:
+            keys = frozenset(_team_key(c["team"]) for c in ev["competitions"][0]["competitors"])
+        except (KeyError, IndexError, TypeError):
+            continue
+        if len(keys) < 2:
+            continue
+        LISTED.setdefault((keys, date_iso), {})[ev["date"]] = bool(stype.get("completed"))
+        if stype.get("name") in _CALLED_OFF_STATUSES:
+            CALLED_OFF.setdefault((keys, date_iso), {})[ev["date"]] = stype["name"]
+
+
 async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dict]:
     """Finished-game results for settling parlay legs: per game {date, goals{team_key:int},
     scorers:set(normalized names)}. Goals come from the final score; scorers from keyEvents
@@ -437,6 +486,8 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             print(f"[espn] results scoreboard {d} failed: {exc}")
             continue
         events = sb.get("events", [])
+        if "events" in sb:                         # a real scoreboard envelope, not an error body
+            _record_called_off(_iso(d), events)
         # a date at least 2 days past is terminal once every game is completed + summarized, INCLUDING a
         # genuinely game-free date (empty events in a real scoreboard envelope, e.g. pre-tournament days)
         if d < settle_cutoff and "events" in sb and all(

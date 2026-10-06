@@ -44,7 +44,9 @@ class SportAdapter:
     kickoff_date_slack: int = 0           # days either side to find the game on ESPN (weekly sports only)
     ledger_prop_quota: tuple = ()         # (stat, slots) pairs: per-type prop slots, filled by role, not by odds
     research: str = ""                    # research layer profile ("football"): a graded Research % beside the line
+    archived: bool = False                # the season is over: the board is a record of results, not live value
     polymarket_series: str = ""           # Polymarket's sports series id for this league's games (top bettors tab)
+    slate_horizon_days: Optional[int] = None  # days ahead the favorites list reaches (None: config.SLATE_HORIZON_DAYS)
     site_path: str = ""                   # the board's address on the one site: /<site_path>/ (nginx routes it)
     code: str = ""                        # short label for the board switcher ("NFL", "CFB")
 

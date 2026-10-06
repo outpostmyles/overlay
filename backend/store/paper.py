@@ -8,7 +8,8 @@ results feed needed for CLV. Win/loss settlement is graded manually for now (sta
 
 CLV %: (closing_fair_prob / pick_fair_prob - 1) * 100. Positive = the line moved toward our pick
 (we got the better price) = beat the close. Only meaningful for favorite-ML picks, where we have a
-clean market fair line on both sides.
+clean market fair line on both sides, and only for a close taken BEFORE kickoff (see _close_flag): a
+price written once the game is under way tracks the score, not the market's view.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import json
 import re
 import sqlite3
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .. import config
@@ -49,7 +50,8 @@ CREATE TABLE IF NOT EXISTS paper_picks (
     stake_units REAL DEFAULT 1.0, -- conviction-scaled units risked (for the bankroll curve)
     legs_json TEXT,               -- structured legs for a parlay entry (for settlement)
     game_over_at TEXT,            -- stamped when the pick's game has a result (still pending = needs grading)
-    sport TEXT                    -- multi-sport namespace; NULL on legacy rows means wc26
+    sport TEXT,                   -- multi-sport namespace; NULL on legacy rows means wc26
+    closing_at TEXT               -- UTC time the close was last written by the pre-start capture
 );
 """
 
@@ -59,7 +61,8 @@ _MIGRATE = [("odds_type", "TEXT"), ("popularity", "INTEGER"),
             ("closing_locked_at", "TEXT"), ("real_money", "INTEGER"),
             ("stake_units", "REAL"), ("legs_json", "TEXT"), ("game_over_at", "TEXT"),
             ("model_prob", "REAL"),
-            ("sport", "TEXT")]   # multi-sport namespace; NULL on legacy rows means wc26
+            ("sport", "TEXT"),   # multi-sport namespace; NULL on legacy rows means wc26
+            ("closing_at", "TEXT")]   # NULL on a close written before the capture stopped at kickoff
 
 
 # --- Model Ledger: pre-kickoff 1X2 forecasts, model vs market, graded on the result ----------- #
@@ -131,14 +134,33 @@ def init_paper() -> None:
             _alter(c, f"ALTER TABLE forecasts ADD COLUMN {col} {typ}")
 
 
+def game_day(commence_time: str | None, logged_at: str | None = None) -> str:
+    """The date a pick's game is played (YYYY-MM-DD), or, when the feed gave no game time, the day the
+    pick was logged. It is the date a pick is deduped on, so a game read again on a later day is the
+    same game, not a new one."""
+    return (commence_time or logged_at or time.strftime("%Y-%m-%d"))[:10]
+
+
 def log_picks(rows: list[dict]) -> int:
-    """Insert picks, ignoring duplicates (same match+archetype+selection on the same day)."""
+    """Insert picks, skipping any the ledger already holds for the same game: same sport, game date,
+    match, archetype and selection. The caller's dedup_key used to start with the day the pick was
+    LOGGED, so reading a game on two different days logged the same bet twice (Spain ML v Saudi
+    Arabia went in on Jun 19 and again on Jun 21). Checking the columns, not just the key, also
+    catches a pick whose earlier copy was keyed the old way."""
     if not rows:
         return 0
     inserted = 0
     sport = _active_sport().key
+    clause, params = _sport_clause()
     with _conn() as c:
         for r in rows:
+            held = c.execute(
+                f"SELECT 1 FROM paper_picks WHERE {clause} AND match=? AND archetype=? AND selection=? "
+                "AND COALESCE(NULLIF(substr(commence_time, 1, 10), ''), substr(logged_at, 1, 10)) = ? LIMIT 1",
+                (*params, r["match"], r["archetype"], r["selection"],
+                 game_day(r.get("commence_time"), r.get("logged_at")))).fetchone()
+            if held:
+                continue
             cur = c.execute(
                 """INSERT OR IGNORE INTO paper_picks
                    (logged_at, match, archetype, selection, confidence, commence_time,
@@ -492,13 +514,15 @@ def settle_parlays(results: list[dict]) -> int:
 
 
 def _utc(s: str | None):
-    """Parse an ISO stamp ('...Z' or '+00:00', with or without seconds) to an aware datetime, or None."""
+    """Parse an ISO stamp ('...Z' or '+00:00', with or without seconds) to an aware datetime, or None. A
+    stamp with no offset is read as UTC, so two stamps can always be compared or subtracted."""
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError, AttributeError):
         return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 def capture_closing(fair_now: dict) -> None:
@@ -512,9 +536,14 @@ def capture_closing(fair_now: dict) -> None:
     23 WC closes ended pinned at 0.989, and all 10 won. Keying by date also stops one game of a series
     overwriting another game's close (the matchup string repeats across a series), and a pick is only
     written while it backs the team that is still the favorite, so a flipped favorite never hands it
-    the other side's price. A pick whose game has started keeps its last pre-start value."""
+    the other side's price. A pick whose game has started keeps its last pre-start value.
+
+    Each write stamps closing_at, the record that this close was taken before kickoff: CLV counts a
+    close only with that stamp (see _close_flag), since the history written before this cutoff kept
+    going through the game."""
     if not fair_now:
         return
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with _conn() as c:
         rows = c.execute(
             "SELECT id, match, commence_time, selection FROM paper_picks WHERE status='pending' "
@@ -523,7 +552,8 @@ def capture_closing(fair_now: dict) -> None:
         for r in rows:
             hit = fair_now.get((r["match"], (r["commence_time"] or "")[:10]))
             if hit and hit[0] == r["selection"] and hit[1] is not None:
-                c.execute("UPDATE paper_picks SET closing_fair_prob=? WHERE id=?", (hit[1], r["id"]))
+                c.execute("UPDATE paper_picks SET closing_fair_prob=?, closing_at=? WHERE id=?",
+                          (hit[1], now, r["id"]))
 
 
 def update_pick(pick_id: int, status: str | None = None, real_money=None) -> None:
@@ -544,10 +574,42 @@ def delete_pick(pick_id: int) -> None:
         c.execute("DELETE FROM paper_picks WHERE id=?", (pick_id,))
 
 
+# The top of a book: a 99 cent contract de-vigs to about 0.989, which is where a decided game trades. A
+# pre-game favorite that short is rare and its close could move at most 1.5 points, so leaving one out
+# costs nothing, while counting the pinned ones leaks the result (10 of the 23 WC closes sat at 0.989,
+# and all 10 won).
+CLOSE_CLAMP = 0.985
+
+
+def _close_flag(r: sqlite3.Row) -> str | None:
+    """Why a pick's stored close can not be used as its closing line, or None when it can (or when the
+    pick has no close). A closing line is the last price BEFORE the game starts:
+      'void'    the pick was voided (a duplicate, a push), so it is not a bet and its close is not counted
+      'clamp'   the price is pinned at the top of the book (CLOSE_CLAMP), where a decided game trades
+      'untimed' there is no record that the close was taken before kickoff. capture_closing stamps
+                closing_at, and it only ever receives games whose verified kickoff is still ahead, so a
+                stamped close is pre-start by construction. An unstamped one predates that cutoff
+                (2026-10-06): the old capture kept overwriting through the game until the pick settled,
+                so it may be any price up to the final whistle (France v Sweden kicked off at 21:00Z and
+                its close was frozen at 22:58 on settlement)."""
+    if r["closing_fair_prob"] is None:
+        return None
+    if r["status"] == "void":
+        return "void"
+    if r["closing_fair_prob"] >= CLOSE_CLAMP:
+        return "clamp"
+    if not r["closing_at"]:
+        return "untimed"
+    return None
+
+
 def _clv(r: sqlite3.Row) -> float | None:
+    """CLV % against a real pre-game close, else None. Every aggregate (the Track Record headline, the
+    per-archetype rows, calibration memory) reads this, so a close _close_flag rejects is left out of
+    all of them at once rather than filtered in each."""
     if r["archetype"] == "parlay":
         return None  # a parlay has no single closing line — CLV doesn't apply
-    if r["pick_fair_prob"] and r["closing_fair_prob"]:
+    if r["pick_fair_prob"] and r["closing_fair_prob"] and _close_flag(r) is None:
         return round((r["closing_fair_prob"] / r["pick_fair_prob"] - 1) * 100, 2)
     return None
 
@@ -572,6 +634,7 @@ def list_picks() -> list[dict]:
     for r in rows:
         d = dict(r)
         d["clv_pct"] = _clv(r)
+        d["close_flag"] = _close_flag(r)   # why a stored close is not counted (the UI says so beside it)
         d["units_pl"] = _pnl(r)
         d["game_over"] = bool(r["game_over_at"])
         out.append(d)
@@ -591,6 +654,7 @@ def _agg(picks: list[dict]) -> dict:
         "wins": sum(1 for p in settled if p["status"] == "won"),
         "hit_rate": round(sum(1 for p in settled if p["status"] == "won") / len(settled) * 100, 1) if settled else None,
         "units_pl": round(pl, 2),
+        "priced": len(priced),                       # P/L and ROI count only these (props carry no price)
         "roi_pct": round(pl / staked * 100, 1) if staked else None,
         "avg_clv": round(sum(graded_clv) / len(graded_clv), 2) if graded_clv else None,
         "beat_close_pct": round(beat / len(graded_clv) * 100, 1) if graded_clv else None,
@@ -719,6 +783,8 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
         # a LOCKED game whose final never arrived (postponed after the lock) can no longer grade once
         # its date falls outside the results window; void it so a future makeup or series game can
         # never masquerade as its result. wc26 games always complete well inside their 40-day window.
+        # (A game ESPN marks canceled or postponed voids sooner, in settle_forecasts; this is the
+        # backstop for one ESPN never flags, or moves off its date.)
         clause, sparams = _sport_clause()
         window = _active_sport().results_window_days
         try:
@@ -859,81 +925,147 @@ def capture_forecast_close(board: dict, now_iso: str | None = None) -> None:
                       (k[0], k[1], k[2], r["id"]))
 
 
-def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int:
-    """Grade forecasts whose game has an ESPN result. The 1X2 settles once (status locked -> settled):
+# A doubleheader's other game starts three or more hours from this one (game 1 has to finish first), and
+# ESPN can nudge a start after the lock (a nightcap rescheduled into a doubleheader moved 23:05Z to
+# 23:30Z), so a final within this window of the frozen kickoff is the row's game and nothing else is.
+_SAME_GAME = timedelta(hours=3)
+
+
+def _start_gap(r, x: dict) -> timedelta | None:
+    """How far ESPN game `x` started from the kickoff row `r` froze at lock (None if either is unknown)."""
+    ko, start = _utc(r["kickoff_iso"]), _utc(x.get("iso"))
+    return abs(start - ko) if ko and start else None
+
+
+def _same_game(r, cands: list[dict], pair_exact: bool, listed_n: int | None = None) -> dict | None:
+    """The ESPN game in `cands` (the pair's finals, plus any start ESPN called off) that IS forecast row
+    `r`'s game, or None to leave the row waiting rather than guess.
+
+    A knockout pair plays once, so pair-only matching is exact for wc26 (its Kalshi market date can lag
+    the ESPN result date, so a date check would regress late kickoffs there). Daily sports replay the
+    same pair across a series, and a POSTPONED game's pair completes a different game later, so they
+    only grade against a same-date game. Within that, a row that froze a kickoff takes the game that
+    started nearest it, and only inside _SAME_GAME. It never takes a lone same-date final from further
+    away: while a nightcap is still being played, game 1 is the pair's only final that day, and nine MLB
+    nightcaps settled on game 1's score that way. Only a row or final with no start on record (rows
+    frozen before kickoffs were kept, finals cached before starts were) falls back to the lone final.
+
+    `cands` can also hold starts ESPN lists that are not final yet ("pending"): when the nearest start is
+    one of those, the row's own game is still to come, so it waits even if a nudged game 1 sits inside
+    the window. `listed_n` is how many games the pair has on that date's scoreboard: with exactly one,
+    its final is the row's game however far a rain delay moved the start."""
+    day = (r["commence_time"] or "")[:10]
+    same_date = [x for x in cands if x.get("date") == day]
+    pool = (same_date or cands) if pair_exact else same_date
+    near = [(gap, x) for x in pool if (gap := _start_gap(r, x)) is not None and gap < _SAME_GAME]
+    if near:
+        best = min(near, key=lambda t: t[0])[1]
+        return None if best.get("pending") else best
+    finals = [x for x in pool if not x.get("called_off") and not x.get("pending")]
+    if len(finals) == 1 and len(pool) == 1 and (listed_n == 1 or _start_gap(r, finals[0]) is None):
+        return finals[0]
+    return None
+
+
+def _row_legs(r) -> list[dict]:
+    """A forecast row's stored legs (graded or not), [] when absent or unreadable."""
+    try:
+        return json.loads(r["legs_json"]) if r["legs_json"] else []
+    except (TypeError, ValueError):
+        return []
+
+
+def grade_forecast(r, g: dict, corners_total=None) -> dict | None:
+    """Every graded column of forecast row `r` settled against ESPN final `g`, as {column: value}, or None
+    when `g` cannot grade it (a side missing from the score, or a level score in a 2-way sport). Pure, so
+    settle_forecasts writes exactly what a one-off regrade of a mis-settled row would.
+
     actual_outcome comes from the 90+ET goals, so a level knockout grades as a DRAW (penalties are flagged
-    in `pens`, never graded). The extra-market legs grade alongside it, and a pending corners leg can fill
-    in on a later pass once API-Football posts the count. Returns the number of newly-settled games."""
-    if not results:
-        return 0
+    in `pens`, never graded). The extra-market legs grade off the same final; the corners leg needs the
+    API-Football count in `corners_total`."""
+    goals = g.get("goals") or {}
+    ga, gb = goals.get(r["team_a"]), goals.get(r["team_b"])
+    if ga is None or gb is None:
+        return None
+    if ga == gb and not (r["market_draw"] or 0):
+        return None    # a level score in a 2-way sport is a suspended oddity, never a gradeable draw
+    graded = _grade_legs(_row_legs(r), ga, gb, r["team_a"], r["team_b"], corners_total,
+                         players=g.get("players"), innings=g.get("innings"))
+    outcome = "a" if ga > gb else "b" if gb > ga else "draw"
+    oi = _OUTCOME_IDX[outcome]
+    kp = (r["market_a"], r["market_draw"], r["market_b"])
+    if r["model_a"] is not None:      # model column rides only where a model exists
+        mp = (r["model_a"], r["model_draw"], r["model_b"])
+        bm, rm = _brier3(mp, oi), _rps3(mp, oi)
+        hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
+    else:
+        bm = rm = hit = None
+    rsp = (r["research_a"], r["research_draw"] or 0.0, r["research_b"])
+    return {"actual_a": ga, "actual_b": gb, "actual_outcome": outcome,
+            "pens": 1 if (outcome == "draw" and g.get("winner")) else 0,
+            "brier_model": bm, "brier_market": _brier3(kp, oi), "rps_model": rm, "rps_market": _rps3(kp, oi),
+            "hit_model": hit, "legs_json": json.dumps(graded),
+            "brier_research": _brier3(rsp, oi) if r["research_a"] is not None else None}
+
+
+def settle_forecasts(results: list[dict], team_stats: dict | None = None,
+                     called_off: dict | None = None, listed: dict | None = None) -> int:
+    """Grade forecasts whose game has an ESPN result. The 1X2 settles once (status locked -> settled) with
+    the columns grade_forecast returns. The extra-market legs grade alongside it, and a pending corners
+    leg can fill in on a later pass once API-Football posts the count.
+
+    called_off is espn.CALLED_OFF's shape, {(pair, date): {start_iso: status}}: a locked game whose own
+    start ESPN reports canceled or postponed voids now, instead of sitting "awaiting result" until the
+    results-window long-stop in lock_forecasts. It is matched like a final (nearest start inside
+    _SAME_GAME), so a doubleheader's called-off game never voids its sibling, and a played final at the
+    row's own start always wins. listed is espn.LISTED's shape, {(pair, date): {start_iso: completed}}:
+    every start the scoreboard shows, so an unfinished game can hold its row (see _same_game).
+    Returns the number of newly-settled games."""
     idx: dict = {}
-    for g in results:
+    for g in results or []:
         ks = list((g.get("goals") or {}).keys())
         if len(ks) == 2:
             idx.setdefault(frozenset(ks), []).append(g)
+    for (pair, day), starts in (called_off or {}).items():
+        for iso, status in starts.items():
+            idx.setdefault(pair, []).append({"date": day, "iso": iso, "called_off": status})
+    for (pair, day), starts in (listed or {}).items():
+        for iso, completed in starts.items():
+            if not completed and iso not in ((called_off or {}).get((pair, day)) or {}):
+                idx.setdefault(pair, []).append({"date": day, "iso": iso, "pending": True})
     if not idx:
         return 0
     corners_idx = _corners_total_index(team_stats)
-    settled = 0
+    pair_exact = _active_sport().pair_only_key
+    settled = voided = 0
     with _conn() as c:
         rows = c.execute(
             "SELECT * FROM forecasts WHERE status IN ('locked','settled') "
             "AND market_a IS NOT NULL"
         ).fetchall()
         for r in rows:
-            # A knockout pair plays once, so pair-only matching is exact for wc26 (its Kalshi market
-            # date can lag the ESPN result date, so a date check would regress late kickoffs there).
-            # Daily sports replay the same pair across a series and a POSTPONED game's pair will
-            # complete a different game later, so they may only grade against a same-date (or exact
-            # scheduled-start) final; anything else stays unsettled rather than guessing.
-            cands = idx.get(frozenset((r["team_a"], r["team_b"]))) or []
-            pair_exact = _active_sport().pair_only_key
-            if pair_exact and len(cands) == 1:
-                g = cands[0]
-            else:
-                same_date = [x for x in cands if x.get("date") == (r["commence_time"] or "")[:10]]
-                pool = same_date if not pair_exact else (same_date or cands)
-                g = next((x for x in pool if x.get("iso") and r["kickoff_iso"]
-                          and x["iso"] == r["kickoff_iso"]), None)
-                if g is None and len(pool) == 1:
-                    g = pool[0]
+            pair = frozenset((r["team_a"], r["team_b"]))
+            listed_n = len((listed or {}).get((pair, (r["commence_time"] or "")[:10])) or {}) or None
+            g = _same_game(r, idx.get(pair) or [], pair_exact, listed_n)
             if not g:
                 continue
-            ga, gb = g["goals"].get(r["team_a"]), g["goals"].get(r["team_b"])
-            if ga is None or gb is None:
+            if g.get("called_off"):
+                if r["status"] == "locked":       # a settled row is history; only a regrade rewrites it
+                    voided += c.execute("UPDATE forecasts SET status='void' WHERE id=? AND status='locked'",
+                                        (r["id"],)).rowcount
                 continue
-            if ga == gb and not (r["market_draw"] or 0):
-                continue   # a level score in a 2-way sport is a suspended oddity, never a gradeable draw
-            try:
-                legs = json.loads(r["legs_json"]) if r["legs_json"] else []
-            except (TypeError, ValueError):
-                legs = []
-            graded = _grade_legs(legs, ga, gb, r["team_a"], r["team_b"],
-                                 corners_idx.get(frozenset((r["team_a"], r["team_b"]))),
-                                 players=g.get("players"), innings=g.get("innings"))
+            f = grade_forecast(r, g, corners_idx.get(pair))
+            if f is None:
+                continue
             if r["status"] == "locked":
-                outcome = "a" if ga > gb else "b" if gb > ga else "draw"
-                oi = _OUTCOME_IDX[outcome]
-                pens = 1 if (outcome == "draw" and g.get("winner")) else 0
-                kp = (r["market_a"], r["market_draw"], r["market_b"])
-                if r["model_a"] is not None:      # model column rides only where a model exists
-                    mp = (r["model_a"], r["model_draw"], r["model_b"])
-                    bm, rm = _brier3(mp, oi), _rps3(mp, oi)
-                    hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
-                else:
-                    bm = rm = hit = None
-                rsp = (r["research_a"], r["research_draw"] or 0.0, r["research_b"])
-                br = _brier3(rsp, oi) if r["research_a"] is not None else None
-                c.execute(
-                    """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
-                       pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?,
-                       legs_json=?, brier_research=? WHERE id=? AND status='locked'""",
-                    (ga, gb, outcome, pens, bm, _brier3(kp, oi),
-                     rm, _rps3(kp, oi), hit, json.dumps(graded), br, r["id"]),
-                )
+                sets = ", ".join(f"{k}=?" for k in f)
+                c.execute(f"UPDATE forecasts SET status='settled', {sets} WHERE id=? AND status='locked'",
+                          (*f.values(), r["id"]))
                 settled += 1
-            elif graded != legs:                 # already settled: only rewrite if a leg newly graded
-                c.execute("UPDATE forecasts SET legs_json=? WHERE id=?", (json.dumps(graded), r["id"]))
+            elif json.loads(f["legs_json"]) != _row_legs(r):   # settled: rewrite only a newly graded leg
+                c.execute("UPDATE forecasts SET legs_json=? WHERE id=?", (f["legs_json"], r["id"]))
+    if voided:
+        print(f"[ledger] voided {voided} locked game(s) ESPN reports canceled or postponed")
     return settled
 
 
@@ -955,8 +1087,9 @@ def list_forecasts() -> list[dict]:
         # rained out: its own final is never arriving, and the same-date settlement pool means a makeup
         # can never grade it. Label it so the board stops promising a result, but leave the status alone.
         # Voiding here would be irreversible and would run before settle_forecasts, destroying the rare
-        # suspended game whose final does legitimately land later; the sport-derived long-stop in
-        # lock_forecasts stays the only locked -> void path.
+        # suspended game whose final does legitimately land later. The only locked -> void paths are
+        # ESPN's own canceled/postponed status (settle_forecasts) and the sport-derived long-stop in
+        # lock_forecasts.
         postponed = {
             r["id"] for r in c.execute(
                 f"SELECT f.id FROM forecasts f WHERE f.status='locked' AND {_sport_clause('f.')[0]} "
@@ -982,9 +1115,11 @@ def list_forecasts() -> list[dict]:
     return out
 
 
-# Price bands for the favorites tracker, labelled the way the bets are placed (American odds).
-_FAV_BANDS = ((0.50, 0.60, "-100 to -150"), (0.60, 0.70, "-150 to -233"),
-              (0.70, 0.75, "-233 to -300"), (0.75, 1.01, "-300 or shorter"))
+# Price bands for the favorites tracker, labelled the way the bets are placed (American odds). A
+# three-way favorite can sit under 50% (a soccer game with a live draw: 11 World Cup favorites did), so
+# it gets the first band instead of falling through every band while still counting toward n.
+_FAV_BANDS = ((0.0, 0.50, "Under 50% (three-way)"), (0.50, 0.60, "-100 to -150"),
+              (0.60, 0.70, "-150 to -233"), (0.70, 0.75, "-233 to -300"), (0.75, 1.01, "-300 or shorter"))
 
 
 def favorites_by_price() -> dict:
@@ -993,7 +1128,8 @@ def favorites_by_price() -> dict:
     end gets a usable sample: through the MLB season and the World Cup, favorites at 70% or more had won
     24 of 25 against 18.5 expected. That was spotted in the data before it was tested, so it is a
     hypothesis to watch, and the football seasons will add hundreds of heavy favorites to settle it.
-    One row per settled game: the side the market favored at lock (a favored draw is skipped)."""
+    One row per settled game: the side the market favored at lock (a favored draw is skipped). Every
+    counted game sits in exactly one band, and n is their sum, so the table always adds up."""
     with _conn() as c:
         rows = c.execute("SELECT COALESCE(sport, 'wc26') s, market_a, market_draw, market_b, actual_outcome "
                          "FROM forecasts WHERE status='settled' AND actual_outcome IS NOT NULL").fetchall()
@@ -1018,8 +1154,8 @@ def favorites_by_price() -> dict:
                 "said": round(exp / n * 100, 1) if n else None, "actual": round(won / n * 100, 1) if n else None,
                 "z": round((won - exp) / var ** 0.5, 2) if var else None, "sports": sports}
 
-    return {"bands": [band(*b) for b in _FAV_BANDS], "heavy": band(0.70, 1.01, "-233 or shorter"),
-            "n": len(games)}
+    bands = [band(*b) for b in _FAV_BANDS]
+    return {"bands": bands, "heavy": band(0.70, 1.01, "-233 or shorter"), "n": sum(b["n"] for b in bands)}
 
 
 def research_study() -> dict:

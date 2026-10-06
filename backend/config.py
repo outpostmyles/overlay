@@ -97,6 +97,9 @@ FORECAST_MIN_N = 8                           # hide aggregate Brier/skill until 
 FORECAST_TOTAL_LINE = 2.5                     # total match goals over/under
 FORECAST_TEAM_LINE = 1.5                      # each team's goals over/under
 FORECAST_CORNERS_LINE = 9.5                   # total corners over/under (graded only with an API-Football key)
+# The widest Kalshi book (ask minus bid, both quoted) a ladder rung may have to set a game's main total or
+# spread line. A thin rung's midpoint is a coin flip by accident: two days out, NHL rungs sit at 0.02/0.84.
+FORECAST_MAX_LINE_WIDTH = 0.10
 # Performance-aware VARIANT (forward-graded experiment, never a replacement): regress a team's finishing
 # toward its shot-on-target VOLUME, so over-scorers get nudged down and under-scorers up. Emitted as a
 # parallel column on the goals legs and graded alongside the goals-only model; only the props, never the 1X2.

@@ -606,6 +606,8 @@ td .rchip { margin-left: 4px; }
 /* phones: stop the card grids overflowing — single column */
 @media (max-width: 600px) {
   header { padding: 0 12px; }
+  .ai-h { flex-wrap: wrap; row-gap: 2px; }
+  .ai-h > .muted { flex-basis: 100%; font: 12px var(--font-ui); }
   .status .pill { display: none; }
   .bet-grid, .fade-grid, .track-stream, .today-grid, .summary { grid-template-columns: 1fr; }
   main { padding: 18px 12px 56px; }

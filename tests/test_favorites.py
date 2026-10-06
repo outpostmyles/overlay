@@ -38,3 +38,17 @@ def test_favorites_pool_every_sport_and_bucket_by_price(monkeypatch):
     h = fp["heavy"]
     assert (h["n"], h["won"], h["expected"]) == (2, 2, 1.5)
     assert h["sports"] == {"wc26": 1, "cfb": 1}
+
+
+def test_three_way_favorite_under_50_has_a_band_and_n_adds_up():
+    """A World Cup favorite can be under 50% with the draw live: 11 were, and they counted toward n (843)
+    while falling into no band (832 shown)."""
+    paper = _fresh_paper()
+    _settled(paper, "wc26", 0.45, 0.30, 0.25, "a")           # three-way favorite at 45%, won
+    _settled(paper, "wc26", 0.25, 0.32, 0.43, "draw")        # three-way favorite at 43%, did not
+    _settled(paper, "mlb", 0.55, 0.0, 0.45, "a")
+    fp = paper.favorites_by_price()
+    assert fp["n"] == 3 == sum(b["n"] for b in fp["bands"])
+    under = fp["bands"][0]
+    assert under["label"] == "Under 50% (three-way)"
+    assert (under["n"], under["won"], under["expected"], under["sports"]) == (2, 1, 0.9, {"wc26": 2})
