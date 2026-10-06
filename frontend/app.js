@@ -103,6 +103,7 @@ function renderAll() {
   }
   renderPicks();
   renderLedger();
+  renderTopBettors();
   renderResearch();
   renderFutures();
   if (state.tab === "track") loadPaper();
@@ -680,6 +681,51 @@ function fadeCard(f) {
     <div class="bc-meta">${esc(f.match || "")}${f.days_out != null ? " · " + dateLabel(f.days_out) : ""}</div>
     <div class="bc-why">${esc(f.reasoning || "")}</div>
   </div>`;
+}
+
+// ---------- render: Top Bettors (what the leaderboards' best sports traders hold on this board) ----------
+const _money = (n) => (n == null ? "-" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1000 ? "$" + (n / 1000).toFixed(1) + "k" : "$" + Math.round(n));
+const _cents = (p) => (p == null ? "" : Math.round(p * 100) + "¢");
+// some wallets have no username, just an address-like id: keep the ends so it stays recognizable
+const _handle = (n) => { n = String(n || ""); return n.length > 22 ? n.slice(0, 10) + "…" + n.slice(-6) : n; };
+function _topLine(l) {
+  if (l.kind === "ml") return `${teamName(l.team)} ML`;
+  if (l.kind === "spread") return `${teamName(l.team)} ${l.line > 0 ? "+" : ""}${l.line}`;
+  if (l.kind === "total") return `${l.dir === "over" ? "Over" : "Under"} ${l.line}`;
+  return l.kind;
+}
+function _topWho(r) {
+  const tags = (r.two_sided ? ` <span class="rchip cau" title="holds both sides of this market; shown net">both sides</span>` : "")
+    + (r.mm ? ` <span class="rchip cau" title="huge volume at a thin profit margin: likely a market maker, so this is inventory, not a pick">market maker?</span>` : "");
+  const size = r.contracts != null ? `${r.contracts.toLocaleString()} contracts (~${_money(r.stake)})` : _money(r.stake);
+  return `<div class="tb-row"><span class="tb-who"><span class="tb-plat ${r.platform === "Kalshi" ? "k" : "p"}">${r.platform === "Kalshi" ? "K" : "PM"}</span> <b title="${esc(r.name)}">${esc(_handle(r.name))}</b> <span class="muted">#${r.rank} ${esc(r.window)} · ${_money(r.pnl)} profit</span>${tags}</span><span class="tb-amt">${size}${r.price != null ? ` <span class="muted">@ ${_cents(r.price)}</span>` : ""}</span></div>`;
+}
+function _topGame(g) {
+  const mk = g.market ? `<div class="rs-line muted">market ${esc(teamName(g.team_a))} ${Math.round(g.market[0] * 100)}% · ${esc(teamName(g.team_b))} ${Math.round(g.market[2] * 100)}%</div>` : "";
+  const c = g.consensus;
+  const cons = c ? `<div class="rs-line">top-bettor money on the moneyline: <b>${esc(teamName(c.team))}</b> ${Math.round(c.share * 100)}% of ${_money(c.total)} <span class="muted">(${c.traders} trader${c.traders > 1 ? "s" : ""})</span></div>` : "";
+  const lines = g.lines.map((l) => `<details class="tb-line"><summary><span class="tb-side">${esc(_topLine(l))}</span><span class="tb-sum">${l.traders} trader${l.traders > 1 ? "s" : ""} · <b>${_money(l.stake)}</b></span></summary>${l.rows.map(_topWho).join("")}</details>`).join("");
+  return `<div class="fcard">
+    <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b></span><span class="fcard-k muted">${_koLabel(g.kickoff_iso)}</span></div>
+    ${mk}${cons}<div class="tb-lines">${lines}</div></div>`;
+}
+function renderTopBettors() {
+  const box = $("#top-body"); if (!box) return;
+  const tt = state.snapshot && state.snapshot.picks && state.snapshot.picks.top_traders;
+  if (!tt) { box.innerHTML = `<div class="muted" style="padding:14px">Top bettors are tracked on the NFL, college football, NHL and MLB boards.</div>`; return; }
+  const m = tt.meta || {};
+  const upd = m.updated ? new Date(m.updated * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "-";
+  const head = `<div class="cal-note muted">${ico("smart")} <span>Tracking the <b>${m.poly_traders || 0}</b> Polymarket wallets in the top 100 sports traders by profit (this month and all-time) and the <b>${m.kalshi_traders || 0}</b> Kalshi traders in its top 100 (all-time and last 30 days), of whom <b>${m.kalshi_visible || 0}</b> share their holdings. Positions as of ${upd}, refreshed every 20 minutes. Big traders tend to build positions close to kickoff, so the board fills in during game week.</span></div>`;
+  const games = tt.games || [];
+  const quiet = Math.max(0, (m.games_listed || 0) - games.length);
+  const grid = games.length
+    ? `<div class="pick-section"><h3>${ico("smart")} By game <span class="muted">· ${games.length} game${games.length > 1 ? "s" : ""} with top-bettor positions${quiet ? `, ${quiet} more with none yet` : ""}; tap a line to see who holds it</span></h3><div class="fgrid">${games.map(_topGame).join("")}</div></div>`
+    : `<div class="muted" style="padding:14px">No top-bettor positions on this board's games yet. They usually build during game week, close to kickoff.</div>`;
+  const lead = (tt.leaders || []).length ? `<div class="pick-section"><h3>${ico("track")} Who is active on this board <span class="muted">· leaderboard traders with money on these games</span></h3>
+    <table class="flat"><thead><tr><th>Trader</th><th>Rank</th><th class="num">Profit</th><th class="num">Lines</th><th class="num">On these games</th></tr></thead><tbody>${tt.leaders.map((r) => `<tr>
+      <td><span class="tb-plat ${r.platform === "Kalshi" ? "k" : "p"}">${r.platform === "Kalshi" ? "K" : "PM"}</span> <b title="${esc(r.name)}">${esc(_handle(r.name))}</b>${r.mm ? ` <span class="rchip cau">market maker?</span>` : ""}</td>
+      <td>#${r.rank} <span class="muted">${esc(r.window)}</span></td><td class="num">${_money(r.pnl)}</td><td class="num">${r.lines}</td><td class="num">${_money(r.stake)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  box.innerHTML = head + grid + lead;
 }
 
 // ---------- render: Research (AI verdict detail + candidate browse) ----------

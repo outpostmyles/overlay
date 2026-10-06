@@ -96,6 +96,7 @@ CFB = register(SportAdapter(
     polymarket_pinned_slugs=(),
     polymarket_classify=_polymarket_classify,
     polymarket_game_slug_prefix="cfb-",
+    polymarket_series="12756",         # Polymarket's series of this league's games (the top bettors tab)
     odds_api_sport="americanfootball_ncaaf",
     prizepicks_league=15,              # community-reported, unverified (DataDome-blocked); bonus only
     capabilities=frozenset(),

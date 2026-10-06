@@ -33,6 +33,7 @@ POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 POLYMARKET_CLOB = "https://clob.polymarket.com"
 POLYMARKET_DATA = "https://data-api.polymarket.com"   # public, no key: /holders, /trades
 KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2"
+KALSHI_SOCIAL = "https://api.elections.kalshi.com/v1/social"   # public, no key: leaderboard + opt-in holdings
 ODDS_API = "https://api.the-odds-api.com/v4"
 
 # --- The Odds API (optional). Set ODDS_API_KEY in .env to enable sportsbook lines. ---

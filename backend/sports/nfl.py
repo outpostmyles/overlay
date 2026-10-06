@@ -96,6 +96,7 @@ NFL = register(SportAdapter(
     polymarket_pinned_slugs=(),
     polymarket_classify=_polymarket_classify,
     polymarket_game_slug_prefix="nfl-",
+    polymarket_series="12185",         # Polymarket's series of this league's games (the top bettors tab)
     odds_api_sport="americanfootball_nfl",
     prizepicks_league=9,               # community-reported, unverified (DataDome-blocked); bonus only
     capabilities=frozenset(),          # anchor-only

@@ -85,6 +85,7 @@ NHL = register(SportAdapter(
     polymarket_pinned_slugs=(),
     polymarket_classify=_polymarket_classify,
     polymarket_game_slug_prefix="nhl-",
+    polymarket_series="10346",         # Polymarket's series of this league's games (the top bettors tab)
     odds_api_sport="icehockey_nhl",
     prizepicks_league=8,               # community-reported, unverified (DataDome-blocked); bonus only
     capabilities=frozenset(),          # anchor-only: no model, futures, corners, lineups, smart money

@@ -35,6 +35,7 @@ SOURCES = {
     "cfb_spreads": "https://www.aeaweb.org/conference/2010/retrieve.php?pdfid=406",
     "availability": "https://www.espn.com/college-football/story/_/id/45968809/big-12-issue-player-availability-reports-first",
     "prop_unders": "https://pff.com/news/nfl-betting-2022-midseason-player-prop-performance-review",
+    "leaderboard": "https://polymarket.com/leaderboard",
 }
 
 # key -> (name, what the research says and what we do with it, source)
@@ -87,6 +88,11 @@ EVIDENCE = {
     "early_season": ("Early season",
                      "September lines carry the most roster uncertainty (transfers, new starters). Bets "
                      "wait for a bigger cushion.", "availability"),
+    "top_traders": ("Top bettors' side",
+                    "The moneyline side holding most of the money from the most profitable sports traders on "
+                    "Polymarket (and Kalshi, where they share holdings). Following big traders is unproven: "
+                    "a position can be a hedge or a late entry at a worse price, so it is tracked, not added.",
+                    "leaderboard"),
 }
 
 # Favorite bias: about half of the favorites' measured edge at each price (floor, added probability)
@@ -282,6 +288,17 @@ def evaluate(sport: str, ctx: dict | None, market: tuple, legs: list[dict], team
                                target={"kind": "ml", "team": opp}, p_crowd=c_of(opp), p_research=r_of(opp)))
         if status in ("questionable", "doubtful"):   # "out" is settled news the market has priced
             uncertain.append("qb")
+
+    # -- the top bettors' moneyline side (Polymarket + opted-in Kalshi leaders), when it is clear --------- #
+    top = ctx.get("top") or {}
+    if top.get("team") in (team_a, team_b):
+        t, money = top["team"], top.get("stake") or 0
+        cash = f"${money / 1000:.1f}k" if money >= 1000 else f"${money:.0f}"
+        name = " ".join(w[:1].upper() + w[1:] for w in t.split())     # "49ers" stays "49ers"
+        factors.append(_factor("top_traders", f"Top bettors: {name} {cash}", "track",
+                               target={"kind": "ml", "team": t}, p_crowd=c_of(t), p_research=r_of(t),
+                               note=f"{top.get('traders', 0)} of the leaders, {round((top.get('share') or 0) * 100)}% "
+                                    f"of their moneyline money on this game."))
 
     # -- rest: a 3+ day gap in days since each team last played ------------------------------------------ #
     rest = ctx.get("rest") or {}

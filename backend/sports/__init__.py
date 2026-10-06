@@ -44,6 +44,7 @@ class SportAdapter:
     kickoff_date_slack: int = 0           # days either side to find the game on ESPN (weekly sports only)
     ledger_prop_quota: tuple = ()         # (stat, slots) pairs: per-type prop slots, filled by role, not by odds
     research: str = ""                    # research layer profile ("football"): a graded Research % beside the line
+    polymarket_series: str = ""           # Polymarket's sports series id for this league's games (top bettors tab)
 
 
 _REGISTRY: dict[str, SportAdapter] = {}

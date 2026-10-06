@@ -83,6 +83,7 @@ MLB = register(SportAdapter(
     polymarket_pinned_slugs=(),
     polymarket_classify=_polymarket_classify,
     polymarket_game_slug_prefix="mlb-",
+    polymarket_series="3",             # Polymarket's series of this league's games (the top bettors tab)
     odds_api_sport="baseball_mlb",
     prizepicks_league=2,               # community-reported, unverified (DataDome-blocked); bonus only
     capabilities=frozenset(),          # anchor-only: no model, futures, corners, lineups, smart money

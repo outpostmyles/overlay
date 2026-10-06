@@ -161,9 +161,14 @@ def _matchup_name(ev_ticker: str, children: list[dict]) -> str | None:
     return None
 
 
+# ticker team code -> team key, learned from the game series' child suffixes on every fetch. Module-level
+# so other readers (the top-bettors holdings map) can name the team behind a ticker like ...TBDAL-DAL.
+TEAM_CODES: dict = {}
+
+
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
-    code_map: dict = {}   # ticker team code -> team key, learned from the game series' child suffixes
+    code_map: dict = TEAM_CODES
     for series, (mtype, group) in active().kalshi_series.items():
         raw = await _fetch_series(client, series)
         if mtype in _PER_LINE_TYPES:

@@ -20,7 +20,7 @@ from .engine import edges, odds_math
 from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
-from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, weather
+from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, toptraders, weather
 from .store import leans, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
@@ -384,6 +384,36 @@ async def get_research_context() -> dict:
     for eid in [e for e, (ts, _) in extras_cache.items() if time.time() - ts > 2 * 86400]:
         extras_cache.pop(eid, None)
     return games
+
+
+async def get_top_traders(free_markets: list[Market], kickoffs: dict) -> dict | None:
+    """What the top sports traders on Polymarket and Kalshi hold on the upcoming games (ESPN's slate for
+    the dates on the board, kicking off within a week), assembled per game and line. The fetching lives
+    in sources/toptraders with its own shared cache; a slow or failed refresh falls back to the last
+    good copy instead of holding up the board."""
+    adapter = sports.active()
+    if not adapter.polymarket_series:
+        return None
+    now = datetime.now(timezone.utc)
+    games = []
+    for key, ko in kickoffs.items():
+        if not (isinstance(key, tuple) and len(key) == 2 and ko and len(key[0]) == 2):
+            continue
+        kdt = _parse_iso(ko)
+        if not kdt or not (now - timedelta(hours=4) <= kdt <= now + timedelta(days=8)):
+            continue
+        if adapter.team_filter and not (set(key[0]) & adapter.team_filter):
+            continue
+        a, b = sorted(key[0])
+        games.append({"team_a": a, "team_b": b, "pair": key[0], "date": key[1], "kickoff_iso": ko})
+    try:
+        cache = await asyncio.wait_for(toptraders.refresh(adapter.key, adapter.polymarket_series), timeout=90)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[toptraders] refresh skipped: {exc!r}")
+        cache = toptraders._load()
+    games.sort(key=lambda g: g["kickoff_iso"])
+    return toptraders.assemble(cache, adapter.key, games,
+                               toptraders.kalshi_ticker_map(free_markets, kalshi.TEAM_CODES))
 
 
 async def _pre_start_closes(favs: list[dict]) -> dict:
@@ -1916,6 +1946,14 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             except Exception as exc:  # noqa: BLE001
                 print(f"[research] context skipped: {exc}")
                 rctx = {}
+            try:
+                top = await get_top_traders(free_markets, fkicks)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[toptraders] skipped: {exc!r}")
+                top = None
+            for g in (top or {}).get("games", []):
+                if g.get("consensus"):          # the research layer tracks the top bettors' moneyline side
+                    rctx.setdefault((frozenset((g["team_a"], g["team_b"])), g["date"]), {})["top"] = g["consensus"]
             joins = {"total": _totals_by_game(markets), "player_prop": _props_by_game(markets),
                      "f5_moneyline": _f5_by_game(markets), "spread": _spreads_by_game(markets)}
             _warn_silent_joins(markets, joins)
@@ -1947,6 +1985,13 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                            "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
                                            "summary": paper.forecast_calibration(),
                                            "fav_price": paper.favorites_by_price()}
+            if top is not None:
+                # each top-bettor game carries the board's market line for context
+                line = {(frozenset((c["team_a"], c["team_b"])), c["commence_time"]): fboard[c["dedup_key"]]["market"]
+                        for c in fcands}
+                for g in top["games"]:
+                    g["market"] = line.get((frozenset((g["team_a"], g["team_b"])), g["date"]))
+                picks_board["top_traders"] = top
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)

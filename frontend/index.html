@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=20261007" />
+  <link rel="stylesheet" href="/styles.css?v=20261008" />
 </head>
 <body>
   <!-- icon sprite -->
@@ -63,6 +63,7 @@
     <nav class="rail">
       <button class="tab active" data-tab="picks"><svg class="ico"><use href="#i-picks"/></svg><span class="label">Best Bets</span></button>
       <button class="tab" data-tab="ledger"><svg class="ico"><use href="#i-track"/></svg><span class="label">Model Ledger</span></button>
+      <button class="tab" data-tab="top"><svg class="ico"><use href="#i-smart"/></svg><span class="label">Top Bettors</span></button>
       <button class="tab" data-tab="research"><svg class="ico"><use href="#i-analyze"/></svg><span class="label">Research</span></button>
       <button class="tab" data-tab="track"><svg class="ico"><use href="#i-track"/></svg><span class="label">Track Record</span></button>
       <button class="tab" data-tab="futures"><svg class="ico"><use href="#i-markets"/></svg><span class="label">Futures</span></button>
@@ -86,6 +87,11 @@
         <div id="ledger-body"></div>
       </section>
 
+      <section id="tab-top" class="panel">
+        <p class="hint">What the most profitable sports traders on <b>Polymarket</b> and <b>Kalshi</b> are holding on the games on this board, line by line: who holds it, how much, and at what price. Polymarket is on-chain, so every wallet is public; Kalshi profiles are private unless the trader opts in, so only some of its leaders appear. A position is a bet someone holds right now, not a tip: some are hedges, and a wallet holding both sides of one market (a market maker) is netted and marked. Whether following them beats the price is graded in the Research study on the football boards.</p>
+        <div id="top-body"></div>
+      </section>
+
       <section id="tab-research" class="panel">
         <p class="hint">The reasoning behind the picks — per-match AI verdicts grounded in live web research (form, injuries, expected lineups, motivation), with smart-money whale backing as a tiebreaker. Tap <b>Analyze</b> (top right) to generate. Below, browse every candidate and tap <b>Read</b> for an on-demand AI take on any prop.</p>
         <div id="research-body"></div>
@@ -106,6 +112,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261007"></script>
+  <script src="/app.js?v=20261008"></script>
 </body>
 </html>

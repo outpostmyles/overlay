@@ -103,6 +103,12 @@ injury status and DraftKings line from the ESPN summary it already uses. Stadium
 once and kept in `poly_geo_cache.json`, gitignored like the other caches. A failed lookup leaves that piece
 of the card blank and logs a `[weather]` or `[espn] extras` line; it never stops a game from locking.
 
+The Top Bettors tab (NFL, college, NHL, MLB) reads Polymarket's public sports leaderboard and wallet
+positions and Kalshi's public leaderboard and opt-in holdings, all keyless. One cache file,
+`poly_toptraders.json` (gitignored), is shared by every sport's process, so the roughly 190 Polymarket
+wallets are fetched once per 20 minutes in total, not once per sport. A refresh that runs long falls back
+to the cached copy after 90 seconds and logs a `[toptraders]` line.
+
 The sport units bind `0.0.0.0` with no auth, by the owner's choice, so they are reachable at
 `http://YOUR_DROPLET_IP:8001` through `:8004`. That is a deliberate exception to the advice below. The
 server runs with every API key blank, so a visitor cannot trigger a paid call, but anyone with the URL
