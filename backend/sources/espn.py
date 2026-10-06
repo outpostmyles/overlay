@@ -97,7 +97,10 @@ async def _scoreboard_events(client: httpx.AsyncClient, yyyymmdd: str) -> dict:
 async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
     """{frozenset(team_key, team_key): kickoff_iso} for the given dates. ESPN's scoreboard carries the
     exact kickoff time (Kalshi/our markets only know the date), so this is what lets the ledger order
-    same-day games by who actually plays first. dates are 'YYYYMMDD'."""
+    same-day games by who actually plays first. dates are 'YYYYMMDD'.
+
+    The same scoreboard also carries each game's venue, roof, neutral-site and conference flags; those
+    are kept in GAME_CONTEXT under the same (pair, date) key for the research layer, at no extra call."""
     from ..matching import normalize_team
     out: dict = {}
     for d in sorted(set(dates)):
@@ -116,8 +119,116 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
                     # date-qualified key for daily sports: a series repeats the same pair across days,
                     # so the pair alone would smear one game's start time over the whole series
                     out[(keys, _iso(d))] = ev["date"]
+                    GAME_CONTEXT[(keys, _iso(d))] = game_context(ev)
             except (KeyError, IndexError, TypeError):
                 continue
+    return out
+
+
+# (pair, date) -> the scoreboard's game context; refreshed whenever the kickoffs are
+GAME_CONTEXT: dict = {}
+
+# ESPN venues it marks open-air that have a fixed roof over the field (SoFi's canopy), so wind and rain
+# never reach the game
+_COVERED_VENUES = {"SoFi Stadium"}
+
+
+def game_context(ev: dict) -> dict:
+    """One scoreboard event's research context: event id, home/away keys, venue and roof, neutral site,
+    conference game, week, each team's ESPN id and season passing leader (the starting QB)."""
+    comp = ev["competitions"][0]
+    venue = comp.get("venue") or {}
+    addr = venue.get("address") or {}
+    teams, ids, passers = {}, {}, {}
+    for c in comp.get("competitors") or []:
+        key = _team_key(c.get("team"))
+        teams[c.get("homeAway")] = key
+        if (c.get("team") or {}).get("id"):
+            ids[str(c["team"]["id"])] = key
+        for lead in c.get("leaders") or []:
+            if lead.get("name") == "passingLeader" and lead.get("leaders"):
+                ath = lead["leaders"][0].get("athlete") or {}
+                if ath.get("displayName"):
+                    passers[key] = ath["displayName"]
+    indoor = venue.get("indoor")
+    if venue.get("fullName") in _COVERED_VENUES:
+        indoor = True
+    return {"event_id": str(ev.get("id") or ""), "kickoff_iso": ev.get("date"),
+            "home": teams.get("home"), "away": teams.get("away"), "team_ids": ids, "passers": passers,
+            "venue": venue.get("fullName"), "city": addr.get("city"), "state": addr.get("state"),
+            "country": addr.get("country"), "indoor": indoor if isinstance(indoor, bool) else None,
+            "neutral": comp.get("neutralSite"), "conference_game": comp.get("conferenceCompetition"),
+            "week": (ev.get("week") or {}).get("number")}
+
+
+_INJURY_STATUSES = {"out", "doubtful", "questionable"}
+
+
+def game_extras(summary: dict, ctx: dict) -> dict:
+    """From an event summary: the starting QB's injury status per team (the passing leader listed out,
+    doubtful or questionable) and DraftKings' moneyline, spread and total (ESPN's pickcenter). Injured
+    reserve is left out on purpose: a QB on IR is old news the line has carried for weeks."""
+    qb: dict = {}
+    for t in summary.get("injuries") or []:
+        key = _team_key(t.get("team"))
+        starter = (ctx.get("passers") or {}).get(key)
+        for inj in t.get("injuries") or []:
+            ath = inj.get("athlete") or {}
+            pos = (ath.get("position") or {}).get("abbreviation")
+            status = (inj.get("status") or "").strip()
+            if pos == "QB" and status.lower() in _INJURY_STATUSES and ath.get("displayName") == starter:
+                qb[key] = {"name": starter, "status": status}
+    dk = None
+    ids = ctx.get("team_ids") or {}
+    for p in summary.get("pickcenter") or []:
+        home, away = p.get("homeTeamOdds") or {}, p.get("awayTeamOdds") or {}
+        hk, ak = ids.get(str(home.get("teamId"))), ids.get(str(away.get("teamId")))
+        if not hk or not ak:
+            continue
+        dk = {"book": (p.get("provider") or {}).get("name") or "DraftKings",
+              "ml": {hk: home.get("moneyLine"), ak: away.get("moneyLine")}}
+        spread = p.get("spread")
+        if spread:                               # home perspective: -3.5 means the home team gives 3.5
+            fav, dog = (hk, ak) if spread < 0 else (ak, hk)
+            dk["spread"] = {"team": fav, "line": abs(spread),
+                            "cover": (home if fav == hk else away).get("spreadOdds"),
+                            "dog": (away if fav == hk else home).get("spreadOdds")}
+        if p.get("overUnder"):
+            dk["total"] = {"line": p["overUnder"], "over": p.get("overOdds"), "under": p.get("underOdds")}
+        break
+    return {"qb": qb, "dk": dk}
+
+
+async def fetch_game_extras(client: httpx.AsyncClient, ctx: dict) -> dict | None:
+    """The event summary's QB injury status and DraftKings line for one game (None if ESPN fails)."""
+    if not ctx.get("event_id"):
+        return None
+    try:
+        r = await client.get(f"{_base()}/summary", params={"event": ctx["event_id"]}, timeout=15)
+        if r.status_code != 200:
+            return None
+        return game_extras(r.json(), ctx)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[espn] extras {ctx.get('event_id')} failed: {exc}")
+        return None
+
+
+async def fetch_week_starts(client: httpx.AsyncClient, week: int, seasontype: int = 2) -> dict:
+    """{team_key: [kickoff_iso, ...]} for every game in one scoreboard week, for days-of-rest math."""
+    params = {"seasontype": seasontype, "week": week, **dict(active().espn_scoreboard_params)}
+    try:
+        r = await client.get(f"{_base()}/scoreboard", params=params, timeout=15)
+        events = r.json().get("events", []) if r.status_code == 200 else []
+    except Exception as exc:  # noqa: BLE001
+        print(f"[espn] week {week} scoreboard failed: {exc}")
+        return {}
+    out: dict = {}
+    for ev in events:
+        try:
+            for c in ev["competitions"][0]["competitors"]:
+                out.setdefault(_team_key(c["team"]), []).append(ev["date"])
+        except (KeyError, IndexError, TypeError):
+            continue
     return out
 
 

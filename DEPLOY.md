@@ -97,6 +97,12 @@ the kernel can move it to swap. Check `free -m` after adding a sport; if `availa
 cannot lock, usually because a team name did not match; one reading "listed but 0 joined" means a feed
 changed its format.
 
+The NFL and college units also run the research layer (`backend/research.py`). For games inside five days
+it reads kickoff weather from Open-Meteo (free, no key, well inside its free limits) and each game's QB
+injury status and DraftKings line from the ESPN summary it already uses. Stadium coordinates are geocoded
+once and kept in `poly_geo_cache.json`, gitignored like the other caches. A failed lookup leaves that piece
+of the card blank and logs a `[weather]` or `[espn] extras` line; it never stops a game from locking.
+
 The sport units bind `0.0.0.0` with no auth, by the owner's choice, so they are reachable at
 `http://YOUR_DROPLET_IP:8001` through `:8004`. That is a deliberate exception to the advice below. The
 server runs with every API key blank, so a visitor cannot trigger a paid call, but anyone with the URL

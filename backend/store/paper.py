@@ -124,6 +124,11 @@ def init_paper() -> None:
         _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_a REAL")
         _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_draw REAL")
         _alter(c, "ALTER TABLE forecasts ADD COLUMN closing_b REAL")
+        # the research layer (football): the Research % frozen beside the market at the same lock, its
+        # Brier once graded, and the factors + context it was built from (for the study)
+        for col, typ in (("research_a", "REAL"), ("research_draw", "REAL"), ("research_b", "REAL"),
+                         ("brier_research", "REAL"), ("research_json", "TEXT")):
+            _alter(c, f"ALTER TABLE forecasts ADD COLUMN {col} {typ}")
 
 
 def log_picks(rows: list[dict]) -> int:
@@ -738,12 +743,17 @@ def lock_forecasts(board: dict, now_iso: str) -> int:
                 continue
             m = b.get("model") or (None, None, None)   # anchor-only sports lock the market line alone
             k = b["market"]
+            rs = b.get("research") or {}
+            rp = rs.get("probs") or (None, None, None)
+            rj = json.dumps({x: rs.get(x) for x in ("factors", "uncertain", "cushion", "value_at", "dk",
+                                                     "context")}) if rs else None
             cur = c.execute(
                 """UPDATE forecasts SET status='locked', lock_ts=?, kickoff_iso=?, model_cutoff=?,
                    model_a=?, model_draw=?, model_b=?, market_a=?, market_draw=?, market_b=?,
-                   market_sources=?, legs_json=? WHERE id=? AND status='pending'""",
+                   market_sources=?, legs_json=?, research_a=?, research_draw=?, research_b=?,
+                   research_json=? WHERE id=? AND status='pending'""",
                 (now_iso, b.get("kickoff_iso"), cutoff, m[0], m[1], m[2], k[0], k[1], k[2],
-                 b.get("sources"), json.dumps(b.get("legs") or []), r["id"]),
+                 b.get("sources"), json.dumps(b.get("legs") or []), rp[0], rp[1], rp[2], rj, r["id"]),
             )
             locked += cur.rowcount
     return locked
@@ -912,12 +922,14 @@ def settle_forecasts(results: list[dict], team_stats: dict | None = None) -> int
                     hit = 1 if max(range(3), key=lambda i: mp[i]) == oi else 0
                 else:
                     bm = rm = hit = None
+                rsp = (r["research_a"], r["research_draw"] or 0.0, r["research_b"])
+                br = _brier3(rsp, oi) if r["research_a"] is not None else None
                 c.execute(
                     """UPDATE forecasts SET status='settled', actual_a=?, actual_b=?, actual_outcome=?,
                        pens=?, brier_model=?, brier_market=?, rps_model=?, rps_market=?, hit_model=?,
-                       legs_json=? WHERE id=? AND status='locked'""",
+                       legs_json=?, brier_research=? WHERE id=? AND status='locked'""",
                     (ga, gb, outcome, pens, bm, _brier3(kp, oi),
-                     rm, _rps3(kp, oi), hit, json.dumps(graded), r["id"]),
+                     rm, _rps3(kp, oi), hit, json.dumps(graded), br, r["id"]),
                 )
                 settled += 1
             elif graded != legs:                 # already settled: only rewrite if a leg newly graded
@@ -962,6 +974,10 @@ def list_forecasts() -> list[dict]:
         except (TypeError, ValueError):
             d["legs"] = []
         d["likely_postponed"] = r["id"] in postponed
+        try:
+            d["research"] = json.loads(r["research_json"]) if r["research_json"] else None
+        except (TypeError, ValueError):
+            d["research"] = None
         out.append(d)
     return out
 
@@ -1004,6 +1020,83 @@ def favorites_by_price() -> dict:
 
     return {"bands": [band(*b) for b in _FAV_BANDS], "heavy": band(0.70, 1.01, "-233 or shorter"),
             "n": len(games)}
+
+
+def research_study() -> dict:
+    """The research layer's report card, pooled across every sport that runs it (NFL + college today).
+
+    Two questions. First, is the Research % better than the crowd's? Paired Brier on the moneyline for
+    every settled game that froze both, and on every leg the research actually moved. Second, factor by
+    factor: when the research made a directional claim (the favorite at 70%, the under in 13 mph wind,
+    the rested team), how often did it come true against what the crowd priced? A z-score near zero
+    means the market already prices that factor; a factor that keeps beating its price is a candidate
+    to start adjusting, and an adjusting factor that does not is one to switch off."""
+    from .. import research as rsch
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT COALESCE(sport, 'wc26') s, team_a, team_b, actual_outcome, market_a, market_draw, "
+            "market_b, research_a, research_draw, research_b, brier_market, brier_research, legs_json, "
+            "research_json FROM forecasts WHERE status='settled' AND research_json IS NOT NULL").fetchall()
+    ml_n = ml_closer = 0
+    ml_bk = ml_br = 0.0
+    leg_n = 0
+    leg_bk = leg_br = 0.0
+    factors: dict = {}
+    for r in rows:
+        if r["brier_research"] is not None and r["brier_market"] is not None:
+            ml_n += 1
+            ml_bk += r["brier_market"]
+            ml_br += r["brier_research"]
+            ml_closer += 1 if r["brier_research"] < r["brier_market"] else 0
+        try:
+            legs = json.loads(r["legs_json"]) if r["legs_json"] else []
+            rj = json.loads(r["research_json"]) or {}
+        except (TypeError, ValueError):
+            continue
+        for leg in legs:   # legs the research moved: Brier on the leg's own side, crowd vs research
+            if leg.get("result") not in ("won", "lost") or leg.get("research_prob") is None \
+                    or abs(leg["research_prob"] - (leg.get("prob") or 0)) < 1e-9:
+                continue
+            y = 1.0 if leg["result"] == "won" else 0.0
+            leg_n += 1
+            leg_bk += (leg["prob"] - y) ** 2
+            leg_br += (leg["research_prob"] - y) ** 2
+        row = {"team_a": r["team_a"], "team_b": r["team_b"], "actual_outcome": r["actual_outcome"]}
+        for f in rj.get("factors") or []:
+            hit = rsch.target_hit(f.get("target"), row, legs)
+            if hit is None or f.get("p_crowd") is None:
+                continue
+            a = factors.setdefault(f["key"], {"key": f["key"], "name": f.get("name") or f["key"],
+                                              "kind": f.get("kind"), "detail": f.get("detail"),
+                                              "source": f.get("source"), "n": 0, "hits": 0,
+                                              "crowd": 0.0, "research": 0.0, "var": 0.0, "sports": {}})
+            a["n"] += 1
+            a["hits"] += hit
+            a["crowd"] += f["p_crowd"]
+            a["research"] += f.get("p_research") if f.get("p_research") is not None else f["p_crowd"]
+            a["var"] += f["p_crowd"] * (1 - f["p_crowd"])
+            a["sports"][r["s"]] = a["sports"].get(r["s"], 0) + 1
+            if f.get("kind") == "adjust":
+                a["kind"] = "adjust"
+    out_f = []
+    for a in factors.values():
+        n = a["n"]
+        out_f.append({"key": a["key"], "name": a["name"], "kind": a["kind"], "detail": a["detail"],
+                      "source": a["source"], "n": n, "hits": a["hits"],
+                      "crowd": round(a["crowd"] / n * 100, 1), "research": round(a["research"] / n * 100, 1),
+                      "actual": round(a["hits"] / n * 100, 1),
+                      "z": round((a["hits"] - a["crowd"]) / a["var"] ** 0.5, 2) if a["var"] else None,
+                      "sports": a["sports"]})
+    out_f.sort(key=lambda x: (x["kind"] != "adjust", -x["n"]))
+    return {"ml": {"n": ml_n, "brier_market": round(ml_bk / ml_n, 4) if ml_n else None,
+                   "brier_research": round(ml_br / ml_n, 4) if ml_n else None,
+                   "skill": round((1 - ml_br / ml_bk) * 100, 2) if ml_n and ml_bk else None,
+                   "closer": ml_closer},
+            "legs": {"n": leg_n, "brier_market": round(leg_bk / leg_n, 4) if leg_n else None,
+                     "brier_research": round(leg_br / leg_n, 4) if leg_n else None,
+                     "skill": round((1 - leg_br / leg_bk) * 100, 2) if leg_n and leg_bk else None},
+            "factors": out_f, "games": len(rows),
+            "min_n": getattr(config, "FORECAST_MIN_N", 8)}
 
 
 def forecast_calibration() -> dict:

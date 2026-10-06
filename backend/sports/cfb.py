@@ -107,4 +107,5 @@ CFB = register(SportAdapter(
     espn_scoreboard_params=(("groups", "80"), ("limit", "300")),   # every FBS game, not a default view
     max_lock_spread=0.10,
     kickoff_date_slack=1,              # Kalshi dated four Oct 17 games "Oct 16" (listed before kickoff was set)
+    research="football",               # the Research % and its factor study (backend/research.py)
 ))

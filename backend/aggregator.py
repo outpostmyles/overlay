@@ -15,12 +15,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
-from . import config, memory, picks, reasoning, smartmoney, sports
+from . import config, memory, picks, reasoning, research, smartmoney, sports
 from .engine import edges, odds_math
 from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
-from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi
+from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, weather
 from .store import leans, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
@@ -35,6 +35,8 @@ _odds_state: dict = {"markets": [], "fetched_at": 0.0, "credits_remaining": None
 _corner_state: dict = {"lines": {}, "fetched_at": 0.0}
 # futures: Monte Carlo tournament sim vs de-vigged Polymarket futures (expensive → cached + threaded)
 _futures_cache: dict = {"data": {"rows": [], "groups_covered": 0, "sims": 0}, "ts": 0.0}
+# research layer: ESPN summaries (QB status + DraftKings line) per event, and past weeks' start times
+_research_cache: dict = {"extras": {}, "weeks": {}}
 
 
 # --------------------------------------------------------------------------- #
@@ -300,6 +302,88 @@ async def attach_kickoffs(picks: list[dict]) -> None:
         teams = frozenset(normalize_team(t) for t in _VS_RE.split(p.get("match") or "") if t.strip())
         ko = kicks.get(teams)
         p["kickoff"] = ko or ((p.get("commence_time") or "9999") + "T23:59:59")   # unknown → end of its day
+
+
+RESEARCH_HORIZON_HOURS = 120  # weather, injuries and book lines are gathered for games inside five days
+
+
+def _rest_days(starts: list[str], kickoff: datetime) -> int | None:
+    """Calendar days (US Eastern) since a team's last game before `kickoff`, from its start times."""
+    prior = [d for d in (_parse_iso(s) for s in starts) if d and d < kickoff - timedelta(hours=12)]
+    if not prior:
+        return None
+    et = research._ET
+    return (kickoff.astimezone(et).date() - max(prior).astimezone(et).date()).days
+
+
+async def get_research_context() -> dict:
+    """{(pair, date): context} for the research layer, for upcoming games inside the horizon. Starts from
+    the scoreboard context ESPN returned with the kickoffs (venue, roof, neutral site, conference game,
+    week, passing leaders), then adds kickoff weather (Open-Meteo), each starting QB's injury status and
+    the DraftKings line (ESPN summary), and days of rest (the two previous scoreboard weeks). All free and
+    cached; a failed piece is left out, never the game, and never the ledger."""
+    adapter = sports.active()
+    if not adapter.research:
+        return {}
+    now = datetime.now(timezone.utc)
+    games: dict = {}
+    for key, ctx in list(espn.GAME_CONTEXT.items()):
+        ko = _parse_iso(ctx.get("kickoff_iso"))
+        if not ko or not (now <= ko <= now + timedelta(hours=RESEARCH_HORIZON_HOURS)):
+            continue
+        if adapter.team_filter and not (set(key[0]) & adapter.team_filter):
+            continue
+        games[key] = dict(ctx)
+    if not games:
+        return {}
+    extras_cache, weeks_cache = _research_cache["extras"], _research_cache["weeks"]
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        gate = asyncio.Semaphore(6)
+
+        async def one(ctx: dict) -> None:
+            async with gate:
+                ko = _parse_iso(ctx["kickoff_iso"])
+                ttl = 1800 if ko - now < timedelta(hours=6) else 7200
+                hit = extras_cache.get(ctx["event_id"])
+                if hit and time.time() - hit[0] < ttl:
+                    extras = hit[1]
+                else:
+                    extras = await espn.fetch_game_extras(client, ctx)
+                    if extras is not None:
+                        extras_cache[ctx["event_id"]] = (time.time(), extras)
+                    elif hit:
+                        extras = hit[1]                 # keep the last good read through an ESPN blip
+                if extras:
+                    ctx.update(qb=extras.get("qb") or {}, dk=extras.get("dk"))
+                if ctx.get("indoor") is False:
+                    ctx["weather"] = await weather.kickoff_weather(
+                        client, ctx.get("city"), ctx.get("state"), ctx.get("country"), ctx["kickoff_iso"])
+
+        await asyncio.gather(*(one(c) for c in games.values()))
+        starts: dict = {}
+        complete = True
+        for w in sorted({c["week"] for c in games.values() if c.get("week")}):
+            for prev in (w - 1, w - 2):
+                if prev < 1:
+                    continue
+                hit = weeks_cache.get(prev)
+                if not hit or time.time() - hit[0] > 12 * 3600:
+                    got = await espn.fetch_week_starts(client, prev)
+                    if got:
+                        weeks_cache[prev] = hit = (time.time(), got)
+                if not hit:
+                    complete = False
+                    continue
+                for team, iso in hit[1].items():
+                    starts.setdefault(team, []).extend(iso)
+    if complete and starts:
+        for key, ctx in games.items():
+            ko = _parse_iso(ctx["kickoff_iso"])
+            ctx["rest"] = {t: _rest_days(starts.get(t, []), ko) for t in key[0]}
+    # forget summaries of games that have started
+    for eid in [e for e, (ts, _) in extras_cache.items() if time.time() - ts > 2 * 86400]:
+        extras_cache.pop(eid, None)
+    return games
 
 
 async def _pre_start_closes(favs: list[dict]) -> dict:
@@ -609,7 +693,8 @@ def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
                     now: datetime, corner_rates=None, poss=None, perf=None,
-                    totals=None, props=None, f5=None, spreads=None) -> tuple[list[dict], dict]:
+                    totals=None, props=None, f5=None, spreads=None,
+                    research_ctx=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -759,12 +844,21 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
                          "player_key": pr["player_key"], "line": pr["line"], "team": None,
                          "side": "over" if pr["fair"] >= 0.5 else "under",
                          "prob": round(max(pr["fair"], 1 - pr["fair"]), 3), "proj": None})
+        market = (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4))
+        # the research layer (football): the crowd's line plus what the research says about this game,
+        # as a separate Research % that locks and grades beside it. Context is what ESPN and the weather
+        # feed know about the game; a game outside the gathering horizon still gets the market-only part.
+        rs = None
+        if sports.active().research:
+            ctx = (research_ctx or {}).get((frozenset((a, b)), gdate))
+            rs = research.evaluate(sports.active().key, ctx, market, legs, a, b)
         board[dedup] = {
             "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
-            "market": (round(ma / tot, 4), round(md / tot, 4), round(mb / tot, 4)),
+            "market": market,
             "sources": sources,
             "legs": legs,
+            "research": rs,
         }
     return cands, board
 
@@ -1133,7 +1227,7 @@ def _price_lookup(best_lines: list[dict]):
     return line
 
 
-def _best_bets(picks_board: dict, best_lines: list[dict]) -> list[dict]:
+def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict | None = None) -> list[dict]:
     """One ranked, cards-first feed scoped to the user's archetypes. Sorted by SOURCE TIER first
     (AI-reasoned > strong/lean heuristic reads > live non-chalk favorites) then within-tier score,
     so credibility — not a brittle mixed scale — drives the order. The best available price + book
@@ -1216,10 +1310,24 @@ def _best_bets(picks_board: dict, best_lines: list[dict]) -> list[dict]:
             **_stake_fields(None, "lean"),
         }
         card.update(price_line(f.get("event"), f.get("team")))
+        rs = (research_by_pair or {}).get(frozenset((f.get("team_key"), f.get("opp_key"))))
+        if rs:
+            card.update(_research_card(rs, f.get("team_key")))
         add(("ml", f.get("team_key")), card)
 
     cards.sort(key=lambda c: (c["tier_rank"], c["score"]), reverse=True)
     return cards[:16]
+
+
+def _research_card(rs: dict, team: str) -> dict:
+    """The research layer's view of one team's moneyline, for its Best Bets card."""
+    dk = rs.get("dk") or {}
+    return {"research_prob": (rs.get("ml") or {}).get(team), "value_at": (rs.get("value_at") or {}).get(team),
+            "cushion": (rs.get("cushion") or {}).get("game"),
+            "factors": [{k: x.get(k) for k in ("key", "label", "kind", "detail", "source")}
+                        for x in rs.get("factors") or [] if x.get("scope") == "game"],
+            "dk_book": dk.get("book"), "dk_price": (dk.get("ml") or {}).get(team),
+            "dk_ev": (dk.get("ev") or {}).get(team)}
 
 
 def _fades(picks_board: dict) -> list[dict]:
@@ -1791,6 +1899,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # Isolated like get_futures: the Model Ledger is an optional second opinion, so a DB/settlement error
     # here must degrade only the ledger, never take down Best Bets / Research / Futures / Track Record.
     # Anchor-only sports (no model) run the ledger MARKET-only: the de-vigged line locks and grades.
+    research_by_pair: dict = {}
     if config.FORECAST_ENABLED:
         try:
             now_utc = datetime.now(timezone.utc)
@@ -1802,6 +1911,11 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                 fdates = sorted({(datetime.strptime(d, "%Y%m%d") + timedelta(days=k)).strftime("%Y%m%d")
                                  for d in fdates for k in range(-slack, slack + 1)})
             fkicks = await get_kickoffs(fdates)
+            try:
+                rctx = await get_research_context()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[research] context skipped: {exc}")
+                rctx = {}
             joins = {"total": _totals_by_game(markets), "player_prop": _props_by_game(markets),
                      "f5_moneyline": _f5_by_game(markets), "spread": _spreads_by_game(markets)}
             _warn_silent_joins(markets, joins)
@@ -1809,7 +1923,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
                                              corner_rates, poss_shares, perf_mult,
                                              totals=joins["total"], props=joins["player_prop"],
-                                             f5=joins["f5_moneyline"], spreads=joins["spread"])
+                                             f5=joins["f5_moneyline"], spreads=joins["spread"],
+                                             research_ctx=rctx)
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line
@@ -1823,7 +1938,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                          "market": fboard[c["dedup_key"]]["market"],
                          "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
                          "sources": fboard[c["dedup_key"]]["sources"],
-                         "legs": fboard[c["dedup_key"]]["legs"]}
+                         "legs": fboard[c["dedup_key"]]["legs"],
+                         "research": fboard[c["dedup_key"]].get("research")}
                         for c in fcands
                         if c["dedup_key"] not in frozen and not fboard[c["dedup_key"]]["missed"]]
             upcoming.sort(key=lambda c: (c.get("kickoff_iso") or "9999"))
@@ -1831,6 +1947,14 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                            "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
                                            "summary": paper.forecast_calibration(),
                                            "fav_price": paper.favorites_by_price()}
+            if sports.active().research:
+                picks_board["model_ledger"]["research_study"] = paper.research_study()
+                picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)
+                # the live research per game, so the Best Bets cards carry it too
+                for c in fcands:
+                    rs = fboard[c["dedup_key"]].get("research")
+                    if rs and not fboard[c["dedup_key"]]["missed"]:
+                        research_by_pair.setdefault(frozenset((c["team_a"], c["team_b"])), rs)
         except Exception as exc:  # noqa: BLE001
             print(f"[aggregator] model_ledger skipped: {exc}")
 
@@ -1857,7 +1981,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
         v["smart_money"] = (b or {}).get("smart_money_match")  # whale tiebreaker, shown in Research
         memory.adjust(v, b or {}, cal_stats)   # gated; provably inert until buckets fill
     picks_board["calibration"] = memory.panel(cal_stats)
-    picks_board["best_bets"] = _best_bets(picks_board, best)
+    picks_board["best_bets"] = _best_bets(picks_board, best, research_by_pair)
     picks_board["fades"] = _fades(picks_board)
     pod, parlay = _daily_card(picks_board["ai"], bundles)
     picks_board["picks_of_day"] = pod

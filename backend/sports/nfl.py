@@ -105,4 +105,5 @@ NFL = register(SportAdapter(
     # per game: both starting QBs, the lead backs, the featured receivers, and the likeliest scorers
     ledger_prop_quota=(("passing yards", 2), ("rushing yards", 4), ("receiving yards", 6),
                        ("receptions", 6), ("touchdowns", 6)),
+    research="football",               # the Research % and its factor study (backend/research.py)
 ))
