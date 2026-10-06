@@ -65,3 +65,4 @@ def active() -> SportAdapter:
 
 from . import wc26  # noqa: E402,F401  (import registers the adapter)
 from . import mlb   # noqa: E402,F401
+from . import nhl   # noqa: E402,F401

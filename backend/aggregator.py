@@ -344,7 +344,30 @@ async def _noop(value):
     return value
 
 
-_TOTAL_TITLE_RE = re.compile(r"^(.+?) vs (.+?) total runs", re.IGNORECASE)
+# "X vs Y: Total Runs" (MLB), "Total Goals" (NHL), "Total Points" (football): one shape, many units
+_TOTAL_TITLE_RE = re.compile(r"^(.+?) vs (.+?) total (?:runs|goals|points)", re.IGNORECASE)
+
+
+_join_state: dict = {}
+
+
+def _warn_silent_joins(markets: list, joined: dict) -> None:
+    """Log once when a market type is listed but joins to zero games, and once when it recovers. Three
+    Kalshi rewordings in 2026 each zeroed a ledger leg for days to weeks without raising a single error
+    (totals from Aug 19, first-five Sep 14-28); listed-but-unjoined is the one symptom they shared."""
+    listed: dict = {}
+    for m in markets:
+        listed[m.market_type] = listed.get(m.market_type, 0) + 1
+    for mtype, games in joined.items():
+        broken = listed.get(mtype, 0) > 0 and not games
+        if broken == _join_state.get(mtype, False):
+            continue
+        _join_state[mtype] = broken
+        if broken:
+            print(f"[ledger] WARNING: {listed[mtype]} {mtype} markets listed but 0 joined to a game; "
+                  f"the feed's ticker or label format may have changed")
+        else:
+            print(f"[ledger] {mtype} joins recovered: {len(games)} game(s)")
 
 
 def _totals_by_game(markets: list) -> dict:
@@ -355,11 +378,17 @@ def _totals_by_game(markets: list) -> dict:
     for m in markets:
         if m.market_type != "total":
             continue
-        tm = _TOTAL_TITLE_RE.match(m.event or "")
         over = next((s for s in m.selections if s.key.startswith("over_")), None)
-        if not tm or over is None or over.fair_prob is None:
+        if over is None or over.fair_prob is None:
             continue
-        pair = frozenset((normalize_team(tm.group(1)), normalize_team(tm.group(2))))
+        packed = (m.group or "").split("|")
+        if len(packed) == 3:                       # the pair rides in from the ticker (durable)
+            pair = frozenset((packed[1], packed[2]))
+        else:                                      # fall back to the prose title (reworded Aug 2026)
+            tm = _TOTAL_TITLE_RE.match(m.event or "")
+            if not tm:
+                continue
+            pair = frozenset((normalize_team(tm.group(1)), normalize_team(tm.group(2))))
         try:
             line = float(over.key.split("_", 1)[1])
         except (ValueError, IndexError):
@@ -1675,12 +1704,14 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                              if m.market_type == "moneyline"
                              and len((m.commence_time or "").replace("-", "")) >= 8})
             fkicks = await get_kickoffs(fdates)
+            joins = {"total": _totals_by_game(markets), "player_prop": _props_by_game(markets),
+                     "f5_moneyline": _f5_by_game(markets)}
+            _warn_silent_joins(markets, joins)
             fcands, fboard = _forecast_board(markets, model, fkicks,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
                                              corner_rates, poss_shares, perf_mult,
-                                             totals=_totals_by_game(markets),
-                                             props=_props_by_game(markets),
-                                             f5=_f5_by_game(markets))
+                                             totals=joins["total"], props=joins["player_prop"],
+                                             f5=joins["f5_moneyline"])
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line

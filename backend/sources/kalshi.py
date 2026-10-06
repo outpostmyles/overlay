@@ -19,7 +19,12 @@ from ..sports import active
 # wrapper from display labels (adapter-gated) so cards read "Germany", not "Reg Time: Germany"
 _REG_TIME = re.compile(r"\breg(?:ular|ulation)?\.?\s*time\b\s*:?\s*", re.IGNORECASE)
 # F5 legs phrase the pick as a sentence ("Pittsburgh wins first 5 innings"); strip to the team
-_F5_WORDS = re.compile(r"\bwins?\s+first\s+5\s+innings(\s+winner)?\b", re.IGNORECASE)
+# "X wins first 5 innings" (summer 2026), "Tie first 5 innings" (Sep 14-28 2026), plain "Tie" (now):
+# the wording churns, so strip the phrase with or without "wins". Missing the bare form turned the
+# tie leg into a fake team for two weeks and silently dropped every first-five call.
+_F5_WORDS = re.compile(r"\b(?:wins?\s+)?first\s+5\s+innings(?:\s+winner)?\b", re.IGNORECASE)
+# ticker date prefix: ddMONyy plus an optional HHMM (MLB tickers carry a start time, NHL tickers do not)
+_DATE_PREFIX = re.compile(r"^\d{2}[A-Z]{3}\d{2}(?:\d{4})?")
 
 
 def _clean(text: str) -> str:
@@ -73,12 +78,16 @@ _PER_LINE_TYPES = ("total", "player_prop")
 
 
 def _prop_pair(event_ticker: str, code_map: dict) -> tuple | None:
-    """'KXMLBHIT-26JUL111610CLEMIA-...' -> the two team keys, split greedily against the code map the
-    game series taught us (ticker team codes concatenate without a separator)."""
+    """'KXMLBHIT-26JUL111610CLEMIA-...' or 'KXNHLTOTAL-26OCT06CARMTL' -> the two team keys, split
+    greedily against the code map the game series taught us (ticker team codes concatenate without a
+    separator). This is the durable way to know a market's game: Kalshi's prose titles get reworded
+    (they changed in August 2026 and broke every title-based join), the ticker structure does not."""
     parts = (event_ticker or "").split("-")
-    if len(parts) < 2 or len(parts[1]) <= 11:
+    if len(parts) < 2:
         return None
-    seg = parts[1][11:]                       # after ddMONyyHHMM
+    seg = _DATE_PREFIX.sub("", parts[1], count=1)   # after ddMONyy[HHMM]
+    if not seg or seg == parts[1]:
+        return None
     for c1 in sorted(code_map, key=len, reverse=True):
         if seg.startswith(c1) and seg[len(c1):] in code_map:
             return code_map[c1], code_map[seg[len(c1):]]
@@ -105,7 +114,7 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dic
                      volume=m.get("volume_fp"), link=f"https://kalshi.com/markets/{series.lower()}")
 
     ev_ticker = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
-    if mtype == "player_prop":                # pack the game pair in so props can join their game
+    if mtype in ("player_prop", "total"):     # pack the game pair from the ticker so the leg can join
         pair = _prop_pair(ev_ticker, code_map)
         if pair:
             group = f"{group}|{pair[0]}|{pair[1]}"
@@ -120,6 +129,28 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dic
         commence_time=kalshi_ticker_date(ev_ticker),
         group=group,
     )
+
+
+def _matchup_name(ev_ticker: str, children: list[dict]) -> str | None:
+    """'A vs B' for a game whose child titles no longer say it. Kalshi moved from 'A vs B Winner?' to
+    'A wins' in August 2026, which left every MLB card titled after one team. The order comes from the
+    event ticker, which concatenates the two team codes (KXNHLGAME-26OCT06CARMTL: Carolina, Montreal)."""
+    by_code: dict = {}
+    for m in children:
+        code = (m.get("ticker") or "").rsplit("-", 1)[-1]
+        label = _clean(m.get("yes_sub_title") or "").strip()
+        if code and label and normalize_team(label) != "draw":
+            by_code[code] = label
+    if len(by_code) != 2:
+        return None
+    parts = (ev_ticker or "").split("-")
+    seg = _DATE_PREFIX.sub("", parts[1], count=1) if len(parts) > 1 else ""
+    c1, c2 = by_code
+    if seg == c1 + c2:
+        return f"{by_code[c1]} vs {by_code[c2]}"
+    if seg == c2 + c1:
+        return f"{by_code[c2]} vs {by_code[c1]}"
+    return None
 
 
 async def fetch(client: httpx.AsyncClient) -> list[Market]:
@@ -179,6 +210,8 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
             if len(selections) < 2:
                 continue
             event_name = title if mtype != "winner_outright" else (active().kalshi_outright_event or title)
+            if mtype == "moneyline" and " vs " not in event_name:
+                event_name = _matchup_name(ev_ticker, children) or event_name
             markets.append(
                 Market(
                     market_id=f"kalshi:{ev_ticker}",

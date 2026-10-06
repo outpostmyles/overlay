@@ -45,6 +45,13 @@ async function loadPaper() {
 }
 
 // ---------- render: top-level ----------
+// Ledger explainer for the anchor-only sports (no model): the sharp market line IS the forecast.
+// The World Cup keeps the default text in index.html, which describes its model-vs-market sheet.
+const ANCHOR_HINTS = {
+  mlb: `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
+  nhl: `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
+};
+
 function renderAll() {
   const s = state.snapshot; if (!s) return;
   const m = s.meta;
@@ -83,9 +90,10 @@ function renderAll() {
       document.title = `Overlay · ${s.meta.sport_name}`;
     }
     const hint = document.querySelector("#tab-ledger .hint");
-    if (hint && s.meta.sport === "mlb" && !hint.dataset.mlb) {
-      hint.dataset.mlb = "1";
-      hint.innerHTML = `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`;
+    const anchorHint = ANCHOR_HINTS[s.meta.sport];
+    if (hint && anchorHint && hint.dataset.sport !== s.meta.sport) {
+      hint.dataset.sport = s.meta.sport;
+      hint.innerHTML = anchorHint;
     }
   }
   renderPicks();

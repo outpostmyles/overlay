@@ -10,7 +10,7 @@ def test_wc26_registered_and_active(monkeypatch):
 
 def test_unknown_sport_fails_loudly(monkeypatch):
     import pytest
-    monkeypatch.setattr(config, "SPORT", "nhl")
+    monkeypatch.setattr(config, "SPORT", "not_a_sport")   # "nhl" served here until NHL became real
     with pytest.raises(ValueError, match="unknown SPORT"):
         sports.active()
 
