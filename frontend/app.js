@@ -52,8 +52,8 @@ async function loadPaper() {
 // The World Cup keeps the default text in index.html, which describes its model-vs-market sheet.
 const ANCHOR_HINTS = {
   mlb: `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
-  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main spread and total, and a prop sheet built from the five props that matter (passing, rushing and receiving yards, receptions, and anytime TD): the starting QBs, the lead backs, the featured receivers, and the likeliest scorers. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. The <b>Research</b> row sits beside it: the market line plus what betting research says about the game. Only factors with evidence that the market misprices them move it (favorite bias, wind and rain on totals); the rest (QB status, rest, travel) are shown and graded in the Research study below, so the record shows which ones deserve weight.`,
-  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline, the main spread, and the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. The <b>Research</b> row sits beside it: the market line plus what betting research says about the game. Only the favorite bias moves it in college so far; weather, big spreads and rest are shown and graded in the Research study below before they earn weight.`,
+  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main spread and total, and a prop sheet built from the five props that matter (passing, rushing and receiving yards, receptions, and anytime TD): the starting QBs, the lead backs, the featured receivers, and the likeliest scorers. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. Beside it sits the <b>research</b>: what betting research says about the game, checked against every NFL closing line since 1999. Only wind and rain move a number (the total); the moneyline stays the market's, because 25 years of closes showed it priced right on average. Everything else (heavy favorites, QB status, rest, travel, the top bettors' side) is shown and graded in the Research study below, so the record shows what deserves weight.`,
+  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline, the main spread, and the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. Beside it sits the <b>research</b>: what betting research says about the game. Nothing moves a college number yet (the NFL test found the moneyline priced right, and college weather is graded first); heavy favorites, weather, big spreads, rest and the top bettors' side are shown and graded in the Research study below before they earn weight.`,
   nhl: `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
 };
 
@@ -103,13 +103,16 @@ function renderAll() {
   }
   renderPicks();
   renderLedger();
+  renderSlip();
   renderTopBettors();
   renderResearch();
   renderFutures();
   if (state.tab === "track") loadPaper();
 }
 
-const teamName = (k) => (k || "").replace(/\b\w/g, (c) => c.toUpperCase());
+// ESPN's own team names when the board ships them ("Texas A&M", "BYU"), else a title-cased key
+const teamName = (k) => ((state.snapshot && state.snapshot.picks && state.snapshot.picks.team_names) || {})[k]
+  || (k || "").replace(/\b\w/g, (c) => c.toUpperCase());
 
 function scoutNotes() { return localStorage.getItem("overlay_futures_notes") || ""; }
 
@@ -142,7 +145,10 @@ const _koLabel = (iso) => {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " +
     d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 };
-const _trip = (p) => `${Math.round(p[0] * 100)} / ${Math.round(p[1] * 100)} / ${Math.round(p[2] * 100)}`;
+// a 2-way sport (no draw) shows "62 / 38"; soccer keeps its three outcomes
+const _trip = (p) => (p[1] ? `${Math.round(p[0] * 100)} / ${Math.round(p[1] * 100)} / ${Math.round(p[2] * 100)}`
+  : `${Math.round(p[0] * 100)} / ${Math.round(p[2] * 100)}`);
+const _legHead = (a, b, p) => `<div class="fcard-leg muted"><span>${esc(teamName(a))}</span>${p && p[1] ? "<span>Draw</span>" : ""}<span>${esc(teamName(b))}</span></div>`;
 // stacked 1X2 bar: team-A win | draw | team-B win
 function _triBar(p, a, b) {
   const w = (x) => (Math.max(0, x) * 100).toFixed(1);
@@ -263,10 +269,12 @@ function _rsNotes(factors) {
     `<div class="rs-note"><b>${esc(f.name || f.label)}</b> <span class="muted">· ${what[f.kind] || ""}</span><div>${esc(f.detail || "")}${f.source ? ` <a href="${esc(f.source)}" target="_blank" rel="noopener">source</a>` : ""}</div></div>`).join("")}</details>`;
 }
 // the Research row, the price each side needs, and DraftKings' price scored against Research
-function _researchBlock(rs, a, b, frozen) {
+function _researchBlock(rs, a, b, frozen, market) {
   if (!rs || !rs.probs || rs.probs[0] == null) return "";
   const p = rs.probs, va = rs.value_at || {}, cush = Math.round(((rs.cushion || {}).game || 0.02) * 100);
-  const row = `<div class="fcard-row"><span class="fcard-t">Research</span>${_triBar([p[0], p[1] || 0, p[2]], a, b)}<span class="fcard-n">${_trip([p[0], p[1] || 0, p[2]])}</span></div>`;
+  // the moneyline only gets its own Research row when the research moved it off the market
+  const moved = !market || [0, 1, 2].some((i) => Math.abs((p[i] || 0) - (market[i] || 0)) >= 0.005);
+  const row = moved ? `<div class="fcard-row"><span class="fcard-t">Research</span>${_triBar([p[0], p[1] || 0, p[2]], a, b)}<span class="fcard-n">${_trip([p[0], p[1] || 0, p[2]])}</span></div>` : "";
   const value = `<div class="rs-line muted" title="the worst price that still clears a ${cush}% edge over the Research %">value at <b>${esc(teamName(a))} ${_amer(va[a])}</b> · <b>${esc(teamName(b))} ${_amer(va[b])}</b> <span>or better</span></div>`;
   const dk = rs.dk && rs.dk.ml && Object.keys(rs.dk.ml).length ? (() => {
     const side = (t) => {
@@ -296,10 +304,10 @@ function _forecastCard(c) {
     ? `<div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>` : "";
   return `<div class="fcard">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(c.a))}</b> <span class="muted">v</span> <b>${esc(teamName(c.b))}</b></span><span class="fcard-k muted">${_koLabel(c.kickoff_iso)} ${badge}${gapChip}</span></div>
-    <div class="fcard-leg muted"><span>${esc(teamName(c.a))}</span><span>Draw</span><span>${esc(teamName(c.b))}</span></div>
+    ${_legHead(c.a, c.b, c.market)}
     ${modelRow}
     <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
-    ${_researchBlock(c.research, c.a, c.b, c.frozen)}
+    ${_researchBlock(c.research, c.a, c.b, c.frozen, c.market)}
     ${_predRows(c.legs, false)}
   </div>`;
 }
@@ -315,12 +323,13 @@ function _settledCard(r) {
     : (r.brier_market != null
       ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}${r.closing_a != null ? ` · closed ${Math.round(r.closing_a * 100)}/${Math.round((r.closing_draw || 0) * 100)}/${Math.round(r.closing_b * 100)}` : ""}</div>` : "");
   const rs = _rowResearch(r);
-  const rsRow = rs ? `<div class="fcard-row"><span class="fcard-t">Research</span>${_triBar(rs.probs, r.team_a, r.team_b)}<span class="fcard-n">${_trip(rs.probs)}</span></div>` : "";
-  const rsBrier = (rs && r.brier_research != null && r.brier_market != null)
+  const rsMoved = rs && [0, 1, 2].some((i) => Math.abs((rs.probs[i] || 0) - ([r.market_a, r.market_draw || 0, r.market_b][i] || 0)) >= 0.005);
+  const rsRow = rsMoved ? `<div class="fcard-row"><span class="fcard-t">Research</span>${_triBar(rs.probs, r.team_a, r.team_b)}<span class="fcard-n">${_trip(rs.probs)}</span></div>` : "";
+  const rsBrier = (rsMoved && r.brier_research != null && r.brier_market != null)
     ? `<div class="fcard-brier muted" title="the Research % Brier on this game vs the market's, frozen at the same lock (lower is better)">Research Brier ${r.brier_research.toFixed(3)} <span class="${r.brier_research < r.brier_market ? "pos" : r.brier_research > r.brier_market ? "neg" : ""}">vs market ${r.brier_market.toFixed(3)}</span></div>` : "";
   return `<div class="fcard settled">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b></span><span class="fcard-k"><b>${esc(score)}</b> <span class="muted">${esc((r.commence_time || "").slice(0, 10))}</span></span></div>
-    <div class="fcard-leg muted"><span>${esc(teamName(r.team_a))}</span><span>Draw</span><span>${esc(teamName(r.team_b))}</span></div>
+    ${_legHead(r.team_a, r.team_b, [r.market_a, r.market_draw, r.market_b])}
     ${lineRow}${rsRow}
     ${rs ? _rsChips(rs.factors) : ""}
     <div class="preds">${_matchResultRow(r)}${_predRowsInner(r.legs, true)}</div>
@@ -401,10 +410,10 @@ function _researchStudyHTML(st, cat) {
       <td class="num">${pct(f.actual)} <span class="muted">(${f.hits}/${f.n})</span></td>
       <td class="num ${f.z == null ? "" : f.z >= 2 ? "pos" : f.z <= -2 ? "neg" : ""}">${f.z == null ? "-" : f.z}</td></tr>`).join("")}</tbody></table>` : "";
   const list = (cat || []).length ? `<details class="rs-notes"><summary>${ico("chevron", "ico ico-chev")} what the research layer checks, and why</summary>${cat.map((f) =>
-    `<div class="rs-note"><b>${esc(f.name)}</b> <span class="rchip ${f.mode === "adjusts" ? "adj" : f.mode === "caution" ? "cau" : "trk"}">${mode[f.mode] || f.mode}</span><div>${esc(f.detail)}${f.source ? ` <a href="${esc(f.source)}" target="_blank" rel="noopener">source</a>` : ""}</div></div>`).join("")}</details>` : "";
+    `<div class="rs-note"><b>${esc(f.name)}</b> <span class="rchip ${f.mode === "adjusts" ? "adj" : f.mode === "caution" ? "cau" : "trk"}">${mode[f.mode] || f.mode}</span><div>${esc(f.detail)}${f.source ? ` <a href="${esc(f.source)}" target="_blank" rel="noopener">source</a>` : ""}</div>${f.history ? `<div class="rs-hist">${esc(f.history)}</div>` : ""}</div>`).join("")}</details>` : "";
   return `<div class="pick-section"><h3>${ico("track")} Research study <span class="muted">· Research % vs the market, and each factor's record against what the market priced (every football sport, pooled)</span></h3>
     ${head}${tbl}
-    <div class="cal-note muted"><span>A factor <b>adjusts</b> the Research % only where studies show the market misprices it; the rest are <b>tracked</b>: shown, graded, and left out of the number. A z-score past +2 means the factor beat its price; near 0 means the market already prices it. Small samples swing, so give each one a full season.</span></div>
+    <div class="cal-note muted"><span>A factor <b>adjusts</b> the Research % only where the market misprices it against the closing line, checked on every NFL game since 1999: today that is wind on NFL totals, plus rain from a published study. The rest are <b>tracked</b>: shown, graded, and left out of the number. The favorite bias failed that test (favorites won about as often as the de-vigged close said), so it moved to tracked. A z-score past +2 means a factor beat its price; near 0 means the market already prices it.</span></div>
     ${list}</div>`;
 }
 
@@ -668,7 +677,7 @@ function betCard(c) {
     ? `<details class="ai-research"><summary>${ico("chevron", "ico ico-chev")} situational brief</summary><div class="body">${mdLite(c.research)}</div></details>` : "";
   return `<div class="card bet-card">
     <div class="bc-top"><span class="tag">${esc((c.archetype || "").replace(/_/g, " "))}</span><span class="bc-src ${c.source}">${srcLabel}</span><span class="bc-r">${right}</span></div>
-    <div class="bc-sel">${esc(c.selection)}${gapChip} ${trap}</div>
+    <div class="bc-sel">${esc(c.selection)}${gapChip} ${trap}${c.chalk ? ' <span class="tag chalk-tag" title="80% or more: safest legs, smallest payouts">heavy favorite</span>' : ""}</div>
     <div class="bc-meta">${esc(c.match || "")}${c.days_out != null ? " · " + dateLabel(c.days_out) : ""}</div>
     <div class="bc-why">${mdLite(c.reasoning || "")}</div>
     ${fair}${price}${model}${rsLine}${dkLine}${rsChips}${stake}${mem}${research}
@@ -682,6 +691,175 @@ function fadeCard(f) {
     <div class="bc-why">${esc(f.reasoning || "")}</div>
   </div>`;
 }
+
+// ---------- render: Bet Slip (value now, the parlay checker, and the owner's own bets) ----------
+const _amToDec = (a) => (a > 0 ? 1 + a / 100 : 1 + 100 / -a);
+const _decToAm = (d) => (d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1)));
+// the worst price that still clears the cushion at probability p (mirrors research.value_at)
+const _valueAt = (p, c = 0.02) => { if (!p || p <= 0 || p >= 1) return null; const d = (1 + c) / p;
+  return d >= 2 ? Math.ceil(+((d - 1) * 100).toFixed(6)) : -Math.floor(+(100 / (d - 1)).toFixed(6)); };
+const _slipKey = () => "overlay_slip_" + (((state.snapshot || {}).meta || {}).sport || "x");
+function _slipLoad() {
+  if (state.slip && state.slip.sport === ((state.snapshot || {}).meta || {}).sport) return state.slip;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(_slipKey()) || "null"); } catch (e) { saved = null; }
+  state.slip = { sport: ((state.snapshot || {}).meta || {}).sport, legs: [], price: "", stake: "", book: "", ...(saved || {}) };
+  return state.slip;
+}
+function _slipSave() { try { localStorage.setItem(_slipKey(), JSON.stringify(state.slip)); } catch (e) { /* private mode: the slip still works for this visit */ } }
+const _legLabel = (l) => l.kind === "ml" ? `${teamName(l.team)} ML`
+  : l.kind === "spread" ? `${teamName(l.team)} ${l.line > 0 ? "+" : ""}${l.line}`
+  : `${l.dir === "over" ? "Over" : "Under"} ${l.line}`;
+const _legId = (l) => [l.dedup, l.kind, l.team || l.dir, l.line].join("|");
+// every pickable side of one live game, with its current Research % (the market's where nothing moved it)
+function _gameSides(g) {
+  const out = [g.team_a, g.team_b].map((t) => ({ dedup: g.dedup, kind: "ml", team: t, p: (g.ml || {})[t] }));
+  if (g.spread) {
+    const other = g.spread.team === g.team_a ? g.team_b : g.team_a;
+    out.push({ dedup: g.dedup, kind: "spread", team: g.spread.team, line: -g.spread.line, p: g.spread.p });
+    out.push({ dedup: g.dedup, kind: "spread", team: other, line: g.spread.line, p: 1 - g.spread.p });
+  }
+  if (g.total) {
+    out.push({ dedup: g.dedup, kind: "total", dir: "over", line: g.total.line, p: g.total.p_over });
+    out.push({ dedup: g.dedup, kind: "total", dir: "under", line: g.total.line, p: 1 - g.total.p_over });
+  }
+  return out;
+}
+function _livePrice(leg) {   // the leg's Research % right now, from the live board
+  const g = (((state.snapshot || {}).picks || {}).slip_games || []).find((x) => x.dedup === leg.dedup);
+  if (!g) return leg.p;
+  const hit = _gameSides(g).find((x) => _legId(x) === _legId(leg));
+  return hit ? hit.p : leg.p;
+}
+function _valueNowHTML(rows) {
+  if (!rows || !rows.length) return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· lines where a real price beats the Research % by its cushion</span></h3><div class="muted" style="padding:6px 2px">Nothing clears the cushion right now. Prices move all week; this list refreshes with the board.</div></div>`;
+  const row = (r) => {
+    const leg = { dedup: r.dedup, kind: r.kind, team: r.team, dir: r.dir, line: r.line, p: r.p };
+    return `<div class="vn-row"><span><b>${esc(_legLabel(leg))}</b> <span class="muted">${esc(teamName(r.team_a))} v ${esc(teamName(r.team_b))} · ${_koLabel(r.kickoff_iso)}</span></span>
+      <span class="vn-r"><span>${esc(r.venue)} <b>${_amer(r.price)}</b> <span class="ev pos">${_evTxt(r.ev)}</span></span>
+      <button class="act tiny" data-slip-add='${esc(JSON.stringify({ ...leg, price: r.price, venue: r.venue }))}'>add to slip</button></span></div>`;
+  };
+  return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· ${rows.length} line${rows.length > 1 ? "s" : ""} where a real price beats the Research % by its cushion (2%, more while a question is open)</span></h3>${rows.map(row).join("")}</div>`;
+}
+function _parlayHTML(slip, games) {
+  const legs = slip.legs.map((l) => ({ ...l, p: _livePrice(l) }));
+  const P = legs.length && legs.every((l) => l.p) ? legs.reduce((a, l) => a * l.p, 1) : null;
+  const price = parseInt(slip.price, 10);
+  const priceOk = !isNaN(price) && Math.abs(price) >= 100;
+  const ev = P && priceOk ? P * _amToDec(price) - 1 : null;
+  const sameGame = new Set(legs.map((l) => l.dedup)).size < legs.length;
+  const verdict = ev == null ? "" : ev >= 0.02 ? `<span class="ev pos">${_evTxt(ev)} expected: worth it</span>`
+    : ev >= 0 ? `<span class="ev">${_evTxt(ev)} expected: too thin</span>` : `<span class="ev neg">${_evTxt(ev)} expected: not worth it</span>`;
+  const legRows = legs.length ? legs.map((l) => `<div class="vn-row"><span><b>${esc(_legLabel(l))}</b> <span class="muted">${esc(teamName(l.team_a || ""))}${l.team_a ? " v " + esc(teamName(l.team_b)) : ""}</span></span><span class="vn-r"><span class="muted">${l.p ? (l.p * 100).toFixed(1) + "%" : "-"}</span><button class="act tiny" data-slip-rm="${esc(_legId(l))}">×</button></span></div>`).join("")
+    : `<div class="muted" style="padding:6px 2px">Add legs from Value now or from the games below.</div>`;
+  const stats = P ? `<div class="summary lg-score slip-stats">
+      <div class="stat"><div class="label">Chance all hit</div><div class="val">${(P * 100).toFixed(1)}%</div></div>
+      <div class="stat"><div class="label">Fair odds</div><div class="val">${_amer(_decToAm(1 / P))}</div></div>
+      <div class="stat"><div class="label">Worth it at</div><div class="val">${_amer(_valueAt(P))} <span class="muted" style="font-size:12px">or better</span></div></div>
+    </div>` : "";
+  const warn = sameGame ? `<div class="cal-note">${ico("shield")} <span>Same-game legs move together, and books price that in. This math treats them as independent, so read it as rough.</span></div>` : "";
+  const form = legs.length ? `<div class="slip-form">
+      <label>Your book's odds <input id="slip-price" inputmode="numeric" placeholder="+450" value="${esc(slip.price)}"></label>
+      <label>Stake <input id="slip-stake" inputmode="decimal" placeholder="10" value="${esc(slip.stake)}"></label>
+      <label>Book <input id="slip-book" placeholder="FanDuel" value="${esc(slip.book)}" maxlength="30"></label>
+      <span class="slip-verdict">${verdict}</span>
+      <button class="btn" id="slip-log" ${priceOk && parseFloat(slip.stake) > 0 ? "" : "disabled"}>Log this bet</button>
+      <button class="act tiny" id="slip-clear">clear</button></div>` : "";
+  const filt = (state.slipFilter || "").toLowerCase();
+  const shown = (games || []).filter((g) => !filt || (teamName(g.team_a) + " " + teamName(g.team_b)).toLowerCase().includes(filt));
+  const inSlip = new Set(slip.legs.map(_legId));
+  const picker = `<div class="slip-pick"><input id="slip-filter" placeholder="find a team" value="${esc(state.slipFilter || "")}">
+    ${shown.slice(0, 40).map((g) => `<div class="sp-game"><div class="sp-h"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b> <span class="muted">${_koLabel(g.kickoff_iso)}</span></div>
+      <div class="sp-sides">${_gameSides(g).map((x) => `<button class="sp-side ${inSlip.has(_legId(x)) ? "on" : ""}" data-slip-add='${esc(JSON.stringify(x))}'>${esc(_legLabel(x))} <span class="muted">${x.p ? Math.round(x.p * 100) + "%" : ""}</span></button>`).join("")}</div></div>`).join("")}
+    ${shown.length > 40 ? `<div class="muted">${shown.length - 40} more: narrow it with the search</div>` : ""}</div>`;
+  return `<div class="pick-section"><h3>${ico("sgp")} Parlay checker <span class="muted">· the true chance it hits, from the Research % of each leg, against your book's payout</span></h3>${legRows}${stats}${warn}${form}
+    <details class="rs-notes" ${slip.legs.length ? "" : "open"}><summary>${ico("chevron", "ico ico-chev")} add legs from any game</summary>${picker}</details></div>`;
+}
+function _myBetsHTML(d) {
+  if (!d) return `<div class="pick-section"><h3>${ico("bets")} My bets</h3><div class="muted" style="padding:6px 2px">Loading…</div></div>`;
+  const s = d.summary || {};
+  const stat = (label, v) => `<div class="stat"><div class="label">${label}</div><div class="val">${v}</div></div>`;
+  const head = s.bets ? `<div class="summary lg-score">
+      ${stat("Record", `${s.won}-${s.lost}${s.push ? "-" + s.push : ""}`)}
+      ${stat("Profit", `<span class="${s.profit > 0 ? "pos" : s.profit < 0 ? "neg" : ""}">${s.profit >= 0 ? "+" : "-"}$${Math.abs(s.profit).toFixed(2)}</span>${s.roi != null ? ` <span class="muted" style="font-size:13px">${s.roi > 0 ? "+" : ""}${s.roi}% ROI</span>` : ""}`)}
+      ${stat("Avg CLV", s.clv_avg == null ? "-" : `<span class="${s.clv_avg > 0 ? "pos" : s.clv_avg < 0 ? "neg" : ""}">${s.clv_avg > 0 ? "+" : ""}${s.clv_avg}%</span>`)}
+      ${stat("Beat the close", s.beat_close == null ? "-" : s.beat_close + "%")}
+    </div><div class="cal-note muted"><span><b>CLV</b> is what your price was worth at the closing line: positive means you got a better number than the market settled on. Over many bets it predicts profit far better than the win-loss record does.</span></div>` : "";
+  const rows = (d.bets || []).map((b) => `<tr>
+      <td>${b.legs.map((l) => `<div><b>${esc(_legLabel(l))}</b> <span class="muted">${esc(teamName(l.team_a))} v ${esc(teamName(l.team_b))}</span></div>`).join("")}</td>
+      <td>${esc(b.book || "")}</td><td class="num">${_amer(b.price)}</td><td class="num">$${b.stake}</td>
+      <td><span class="tag ${b.status === "won" ? "won" : b.status === "lost" ? "lost" : ""}">${esc(b.status)}</span></td>
+      <td class="num ${b.profit > 0 ? "pos" : b.profit < 0 ? "neg" : ""}">${b.profit == null ? "" : (b.profit >= 0 ? "+" : "-") + "$" + Math.abs(b.profit).toFixed(2)}</td>
+      <td class="num ${b.clv > 0 ? "pos" : b.clv < 0 ? "neg" : ""}" title="value at the close">${b.clv == null ? "-" : _evTxt(b.clv)}</td>
+      <td><button class="act tiny" data-bet-rm="${b.id}" title="delete this bet">×</button></td></tr>`).join("");
+  const table = rows ? `<div class="tbl-scroll"><table class="flat"><thead><tr><th>Bet</th><th>Book</th><th class="num">Price</th><th class="num">Stake</th><th>Status</th><th class="num">Profit</th><th class="num">CLV</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : `<div class="muted" style="padding:6px 2px">No bets logged yet. Build one above and tap <b>Log this bet</b>.</div>`;
+  return `<div class="pick-section"><h3>${ico("bets")} My bets <span class="muted">· what you actually bet, graded off the final and scored against the close</span></h3>${head}${table}</div>`;
+}
+function renderSlip(force) {
+  const box = $("#slip-body"); if (!box) return;
+  // the board refreshes on a timer; never yank a field out from under someone typing in it
+  if (!force && box.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+  const p = (state.snapshot && state.snapshot.picks) || {};
+  const slip = _slipLoad();
+  box.innerHTML = _valueNowHTML(p.value_now) + _parlayHTML(slip, p.slip_games) + _myBetsHTML(state.mybets);
+}
+async function loadMyBets() {
+  try { state.mybets = await getJSON("/api/mybets"); } catch (e) { state.mybets = { bets: [], summary: {} }; }
+  if (state.tab === "slip") renderSlip(true);
+}
+document.addEventListener("click", async (e) => {
+  const add = e.target.closest("[data-slip-add]");
+  if (add) {
+    const leg = JSON.parse(add.getAttribute("data-slip-add"));
+    const slip = _slipLoad();
+    const g = (((state.snapshot || {}).picks || {}).slip_games || []).find((x) => x.dedup === leg.dedup) || {};
+    const id = _legId(leg);
+    if (slip.legs.some((l) => _legId(l) === id)) slip.legs = slip.legs.filter((l) => _legId(l) !== id);
+    else {
+      slip.legs = slip.legs.filter((l) => !(l.dedup === leg.dedup && l.kind === leg.kind));   // one side per line
+      slip.legs.push({ ...leg, team_a: g.team_a, team_b: g.team_b });
+      if (leg.price && slip.legs.length === 1) { slip.price = String(leg.price); slip.book = leg.venue || slip.book; }
+    }
+    _slipSave(); renderSlip(true); return;
+  }
+  const rm = e.target.closest("[data-slip-rm]");
+  if (rm) { const slip = _slipLoad(); slip.legs = slip.legs.filter((l) => _legId(l) !== rm.getAttribute("data-slip-rm")); _slipSave(); renderSlip(true); return; }
+  if (e.target.id === "slip-clear") { const slip = _slipLoad(); slip.legs = []; slip.price = ""; _slipSave(); renderSlip(true); return; }
+  if (e.target.id === "slip-log") {
+    const slip = _slipLoad();
+    const body = { legs: slip.legs.map((l) => ({ dedup: l.dedup, kind: l.kind, team: l.team, dir: l.dir, line: l.line })),
+                   price: parseInt(slip.price, 10), stake: parseFloat(slip.stake), book: slip.book };
+    try {
+      await getJSON("/api/mybets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      slip.legs = []; slip.price = ""; _slipSave();
+      await loadMyBets(); renderSlip(true);
+    } catch (err) {
+      let msg = err.message; try { msg = JSON.parse(msg).detail || msg; } catch (x) { /* plain text */ }
+      alert("Could not log the bet: " + msg);
+    }
+    return;
+  }
+  const del = e.target.closest("[data-bet-rm]");
+  if (del && confirm("Delete this bet from your record?")) {
+    await getJSON("/api/mybets/" + del.getAttribute("data-bet-rm"), { method: "DELETE" });
+    await loadMyBets();
+  }
+});
+document.addEventListener("input", (e) => {
+  const map = { "slip-price": "price", "slip-stake": "stake", "slip-book": "book" };
+  if (map[e.target.id]) {
+    const slip = _slipLoad(); slip[map[e.target.id]] = e.target.value; _slipSave();
+    const pos = e.target.selectionStart, id = e.target.id;
+    renderSlip(true);
+    const el = document.getElementById(id); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (x) { /* number inputs */ } }
+  } else if (e.target.id === "slip-filter") {
+    state.slipFilter = e.target.value;
+    const pos = e.target.selectionStart;
+    renderSlip(true);
+    const el = document.getElementById("slip-filter"); if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+  }
+});
 
 // ---------- render: Top Bettors (what the leaderboards' best sports traders hold on this board) ----------
 const _money = (n) => (n == null ? "-" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1000 ? "$" + (n / 1000).toFixed(1) + "k" : "$" + Math.round(n));
@@ -1095,6 +1273,7 @@ function switchTab(name) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
   if (name === "track") loadPaper();
+  if (name === "slip") loadMyBets();
 }
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
 

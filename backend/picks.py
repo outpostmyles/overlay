@@ -245,7 +245,7 @@ def generate(markets: list[Market], props: list[dict], model, cfg, smart_money: 
         })
 
     return {
-        "favorite_ml": favorites[:10],
+        "favorite_ml": favorites[:24],
         "team_total_over": team_totals[:10],
         "anytime_goalscorer": goalscorers,
         "shots_sot": shots_sot,

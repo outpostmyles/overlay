@@ -143,7 +143,7 @@ button { font-family: var(--font-ui); }
 .rail-foot .odds-btn { width: 100%; justify-content: center; }
 
 /* -------------------------------------------------------------------- main */
-main { margin-left: var(--rail); padding: 28px 32px 90px; max-width: 1220px; }
+main { margin-left: var(--rail); padding: 28px 32px 90px; max-width: 1220px; min-width: 0; }   /* a wide table scrolls in place instead of widening the page */
 .panel { display: none; animation: fade .22s ease; }
 .panel.active { display: block; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -492,11 +492,29 @@ td .rchip { margin-left: 4px; }
 .rs-notes[open] summary .ico-chev { transform: rotate(90deg); }
 .rs-note { margin-top: 6px; line-height: 1.5; }
 .rs-note a { color: var(--accent2); }
+.rs-hist { margin-top: 2px; font: 11px var(--font-mono); color: var(--accent2); }
 .pred4 { grid-template-columns: 1fr auto auto auto; }
 .pred-v { font: 10.5px var(--font-mono); color: var(--accent2); min-width: 40px; text-align: right; }
 .pred4 .pred-c { width: auto; min-width: 34px; }
 .rs-moved { color: var(--accent-bright); }
 .rs-tag { font: 600 9px var(--font-ui); color: var(--accent2); text-transform: uppercase; letter-spacing: .04em; }
+/* bet slip */
+.tbl-scroll { overflow-x: auto; max-width: 100%; }
+.vn-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid rgba(255,255,255,.05); font-size: 12.5px; }
+.vn-r { display: flex; align-items: center; gap: 10px; font: 12px var(--font-mono); white-space: nowrap; }
+.slip-stats { margin-top: 10px; }
+.slip-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 10px; }
+.slip-form label { display: flex; flex-direction: column; gap: 3px; font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.slip-form input, .slip-pick input { background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font: 13px var(--font-mono); padding: 7px 9px; width: 110px; }
+.slip-pick input { width: 100%; max-width: 280px; margin: 8px 0; font-family: var(--font-ui); }
+.slip-verdict { font: 12.5px var(--font-mono); padding-bottom: 8px; }
+.sp-game { padding: 6px 0; border-top: 1px solid rgba(255,255,255,.05); }
+.sp-h { font-size: 12.5px; margin-bottom: 5px; }
+.sp-sides { display: flex; flex-wrap: wrap; gap: 5px; }
+.sp-side { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text-dim); font: 11.5px var(--font-ui); padding: 4px 8px; cursor: pointer; }
+.sp-side.on { border-color: var(--accent); color: var(--text); background: rgba(139,123,255,.14); }
+.sp-side:hover { border-color: var(--border-bright); }
+@media (max-width: 600px) { .vn-row { flex-direction: column; align-items: flex-start; } }
 /* top bettors */
 .tb-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .tb-line { border-top: 1px solid rgba(255,255,255,.06); padding-top: 5px; }

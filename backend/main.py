@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import aggregator, config, futures_read, propread, sports
-from .store import leans, paper
+from .store import leans, mybets, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
@@ -37,6 +37,7 @@ def _startup() -> None:
     adapter = sports.active()
     print(f"[sports] active adapter: {adapter.key} ({adapter.display_name})")
     paper.init_paper()
+    mybets.init()
 
 
 @app.on_event("startup")
@@ -145,6 +146,30 @@ async def patch_paper(pick_id: int, data: dict) -> dict:
 async def remove_paper(pick_id: int) -> dict:
     paper.delete_pick(pick_id)
     return {"ok": True}
+
+
+# --- My bets: the bets the owner actually placed, graded against the close --- #
+@app.get("/api/mybets")
+async def get_mybets() -> dict:
+    bets = mybets.list_bets()
+    return {"bets": bets, "summary": mybets.summary(bets)}
+
+
+@app.post("/api/mybets")
+async def add_mybet(payload: dict) -> dict:
+    """Log a bet (a single or a parlay) on games from the live board: {legs: [{dedup, kind, team|dir,
+    line}], price (American), stake, book}. It is priced against the board the owner was looking at."""
+    if not aggregator.LAST_GAMES:
+        await aggregator.build_snapshot()
+    try:
+        return mybets.log_bet(payload, aggregator.LAST_GAMES)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/mybets/{bet_id}")
+async def remove_mybet(bet_id: int) -> dict:
+    return {"removed": mybets.delete(bet_id)}
 
 
 # --- Frontend ------------------------------------------------------------- #

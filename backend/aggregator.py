@@ -21,7 +21,7 @@ from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, toptraders, weather
-from .store import leans, paper
+from .store import leans, mybets, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
                      "props_fresh": 0.0}   # wall-clock of the last real (non-fallback) props pull
@@ -37,6 +37,9 @@ _corner_state: dict = {"lines": {}, "fetched_at": 0.0}
 _futures_cache: dict = {"data": {"rows": [], "groups_covered": 0, "sims": 0}, "ts": 0.0}
 # research layer: ESPN summaries (QB status + DraftKings line) per event, and past weeks' start times
 _research_cache: dict = {"extras": {}, "weeks": {}}
+# the latest board's games by dedup key (teams, date, kickoff, market, legs, research), so a bet logged
+# between snapshots is priced against what the owner was looking at
+LAST_GAMES: dict = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -316,7 +319,7 @@ def _rest_days(starts: list[str], kickoff: datetime) -> int | None:
     return (kickoff.astimezone(et).date() - max(prior).astimezone(et).date()).days
 
 
-async def get_research_context() -> dict:
+async def get_research_context(results: list | None = None) -> dict:
     """{(pair, date): context} for the research layer, for upcoming games inside the horizon. Starts from
     the scoreboard context ESPN returned with the kickoffs (venue, roof, neutral site, conference game,
     week, passing leaders), then adds kickoff weather (Open-Meteo), each starting QB's injury status and
@@ -380,6 +383,17 @@ async def get_research_context() -> dict:
         for key, ctx in games.items():
             ko = _parse_iso(ctx["kickoff_iso"])
             ctx["rest"] = {t: _rest_days(starts.get(t, []), ko) for t in key[0]}
+    # leagues without scoreboard weeks (hockey) read rest from the finished games already in hand: a
+    # back-to-back is one day, well inside the results window
+    played: dict = {}
+    for g in results or []:
+        for team in (g.get("goals") or {}):
+            if g.get("iso"):
+                played.setdefault(team, []).append(g["iso"])
+    for key, ctx in games.items():
+        if "rest" not in ctx and not ctx.get("week") and played:
+            ko = _parse_iso(ctx["kickoff_iso"])
+            ctx["rest"] = {t: _rest_days(played.get(t, []), ko) for t in key[0]}
     # forget summaries of games that have started
     for eid in [e for e, (ts, _) in extras_cache.items() if time.time() - ts > 2 * 86400]:
         extras_cache.pop(eid, None)
@@ -882,6 +896,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
         if sports.active().research:
             ctx = (research_ctx or {}).get((frozenset((a, b)), gdate))
             rs = research.evaluate(sports.active().key, ctx, market, legs, a, b)
+        asks = {s.key: q.ask for s in teams for q in s.quotes if q.source == "kalshi" and q.ask}
         board[dedup] = {
             "lock_now": lock_now, "missed": missed, "kickoff_iso": ko,
             "model": (round(mp[a], 4), round(mp["draw"], 4), round(mp[b], 4)) if mp else None,
@@ -889,6 +904,7 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             "sources": sources,
             "legs": legs,
             "research": rs,
+            "kalshi_ask": asks,
         }
     return cands, board
 
@@ -1327,15 +1343,14 @@ def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict
             **_stake_fields(None, tier),
         })
 
-    for f in picks_board.get("favorite_ml", []):        # tier 1 — live (non-chalk) favorites
-        if f.get("chalk"):
-            continue
+    for f in picks_board.get("favorite_ml", []):        # tier 1: live favorites, heavy ones included
         model_txt = f", model {f['model_prob'] * 100:.0f}%" if f.get("model_prob") is not None else ""
         card = {
             "source": "model", "archetype": "favorite_ml", "selection": f"{f['team']} ML",
             "match": f.get("event"), "days_out": f.get("days_out"), "confidence": None, "tier": "lean",
             "reasoning": f"{f['fair_prob'] * 100:.0f}% sharp fair{model_txt}",
             "market_prob": f.get("fair_prob"), "model_prob": f.get("model_prob"),  # for the gap chip
+            "chalk": bool(f.get("chalk")),
             "tier_rank": 1, "score": f["fair_prob"] * 100,
             **_stake_fields(None, "lean"),
         }
@@ -1346,7 +1361,71 @@ def _best_bets(picks_board: dict, best_lines: list[dict], research_by_pair: dict
         add(("ml", f.get("team_key")), card)
 
     cards.sort(key=lambda c: (c["tier_rank"], c["score"]), reverse=True)
-    return cards[:16]
+    return cards[:24]
+
+
+def _value_now(games: list[dict]) -> list[dict]:
+    """Every line where a real price beats the Research % by its cushion right now: DraftKings' moneyline,
+    spread and total (via ESPN), and Kalshi's own moneyline ask after its fee. One row per side, best
+    value first. `games` are the live board entries (with team_a, team_b, kickoff_iso, dedup)."""
+    out = []
+    for g in games:
+        rs = g.get("research") or {}
+        if not rs:
+            continue
+        cushion = (rs.get("cushion") or {}).get("game") or 0.02
+        dk = rs.get("dk") or {}
+        base = {"dedup": g["dedup"], "team_a": g["team_a"], "team_b": g["team_b"],
+                "kickoff_iso": g.get("kickoff_iso"), "cushion": cushion}
+        for team, ev in (dk.get("ev") or {}).items():
+            if ev is not None and ev >= cushion:
+                out.append({**base, "kind": "ml", "team": team, "venue": dk.get("book") or "DraftKings",
+                            "price": dk["ml"][team], "p": (rs.get("ml") or {}).get(team), "ev": ev,
+                            "value_at": (rs.get("value_at") or {}).get(team)})
+        sp = dk.get("spread") or {}
+        for side, ev_key, price_key in (("cover", "ev_cover", "cover"), ("dog", "ev_dog", "dog")):
+            ev = sp.get(ev_key)
+            if ev is not None and ev >= cushion and sp.get(price_key):
+                team = sp["team"] if side == "cover" else (g["team_b"] if sp["team"] == g["team_a"] else g["team_a"])
+                line = -sp["line"] if side == "cover" else sp["line"]
+                out.append({**base, "kind": "spread", "team": team, "line": line, "venue": dk.get("book") or "DraftKings",
+                            "price": sp[price_key], "ev": ev})
+        tot = dk.get("total") or {}
+        for d in ("over", "under"):
+            ev = tot.get(f"ev_{d}")
+            if ev is not None and ev >= cushion and tot.get(d):
+                out.append({**base, "kind": "total", "dir": d, "line": tot["line"],
+                            "venue": dk.get("book") or "DraftKings", "price": tot[d], "ev": ev})
+        for team, ask in (g.get("kalshi_ask") or {}).items():
+            p = (rs.get("ml") or {}).get(team)
+            if not p or not ask or not 0 < ask < 1:
+                continue
+            cost = ask + config.KALSHI_FEE_COEF * ask * (1 - ask)     # the taker fee per contract
+            ev = round(p / cost - 1, 4)
+            if ev >= cushion:
+                out.append({**base, "kind": "ml", "team": team, "venue": "Kalshi",
+                            "price": odds_math.prob_to_american(cost), "p": p, "ev": ev, "ask": ask,
+                            "value_at": (rs.get("value_at") or {}).get(team)})
+    out.sort(key=lambda r: -r["ev"])
+    return out
+
+
+def _slip_game(g: dict) -> dict:
+    """One live game as the bet slip needs it: the Research % (the market's where nothing moved it) on
+    each moneyline side, the main spread and the main total."""
+    rs = g.get("research") or {}
+    m = g.get("market") or (0, 0, 0)
+    out = {"dedup": g["dedup"], "team_a": g["team_a"], "team_b": g["team_b"], "kickoff_iso": g.get("kickoff_iso"),
+           "ml": rs.get("ml") or {g["team_a"]: m[0], g["team_b"]: m[2]}}
+    for leg in g.get("legs") or []:
+        p = leg.get("research_prob") if leg.get("research_prob") is not None else leg.get("prob")
+        if p is None:
+            continue
+        if leg.get("key") == "spread":
+            out["spread"] = {"team": leg["team"], "line": leg["line"], "p": p if leg.get("side") == "cover" else 1 - p}
+        elif leg.get("key") == "total_goals":
+            out["total"] = {"line": leg["line"], "p_over": p if leg.get("side") == "over" else 1 - p}
+    return out
 
 
 def _research_card(rs: dict, team: str) -> dict:
@@ -1942,7 +2021,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                  for d in fdates for k in range(-slack, slack + 1)})
             fkicks = await get_kickoffs(fdates)
             try:
-                rctx = await get_research_context()
+                rctx = await get_research_context(results)
             except Exception as exc:  # noqa: BLE001
                 print(f"[research] context skipped: {exc}")
                 rctx = {}
@@ -1968,6 +2047,10 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line
                                          now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)
+            try:
+                mybets.settle()                             # the owner's logged bets grade off the same finals
+            except Exception as exc:  # noqa: BLE001  (a bet-log problem must never cost the ledger a cycle)
+                print(f"[mybets] settle skipped: {exc}")
             rows = paper.list_forecasts()                   # frozen (locked) + graded (settled)
             frozen = {r["dedup_key"] for r in rows}
             # live preview of games not yet frozen: the model's CURRENT line + leg picks, shown so the slate
@@ -1985,6 +2068,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                            "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
                                            "summary": paper.forecast_calibration(),
                                            "fav_price": paper.favorites_by_price()}
+            picks_board["team_names"] = {k: v for c in espn.GAME_CONTEXT.values()
+                                         for k, v in (c.get("names") or {}).items()}
             if top is not None:
                 # each top-bettor game carries the board's market line for context
                 line = {(frozenset((c["team_a"], c["team_b"])), c["commence_time"]): fboard[c["dedup_key"]]["market"]
@@ -1992,6 +2077,17 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                 for g in top["games"]:
                     g["market"] = line.get((frozenset((g["team_a"], g["team_b"])), g["date"]))
                 picks_board["top_traders"] = top
+            # every live game, priced for the bet slip (value now, parlays, logging a bet)
+            live = [{"dedup": c["dedup_key"], "team_a": c["team_a"], "team_b": c["team_b"],
+                     "date": c["commence_time"], "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
+                     "market": fboard[c["dedup_key"]]["market"], "legs": fboard[c["dedup_key"]]["legs"],
+                     "research": fboard[c["dedup_key"]].get("research"),
+                     "kalshi_ask": fboard[c["dedup_key"]].get("kalshi_ask")}
+                    for c in fcands if not fboard[c["dedup_key"]]["missed"]]
+            LAST_GAMES.clear()
+            LAST_GAMES.update({g["dedup"]: g for g in live})
+            picks_board["value_now"] = _value_now(live)
+            picks_board["slip_games"] = [_slip_game(g) for g in sorted(live, key=lambda g: g.get("kickoff_iso") or "9999")]
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)

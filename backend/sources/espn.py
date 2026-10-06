@@ -139,10 +139,13 @@ def game_context(ev: dict) -> dict:
     comp = ev["competitions"][0]
     venue = comp.get("venue") or {}
     addr = venue.get("address") or {}
-    teams, ids, passers = {}, {}, {}
+    teams, ids, passers, names = {}, {}, {}, {}
     for c in comp.get("competitors") or []:
         key = _team_key(c.get("team"))
         teams[c.get("homeAway")] = key
+        t = c.get("team") or {}
+        if t.get(active().espn_team_field) or t.get("displayName"):     # "Texas A&M", "Dallas Cowboys"
+            names[key] = t.get(active().espn_team_field) or t.get("displayName")
         if (c.get("team") or {}).get("id"):
             ids[str(c["team"]["id"])] = key
         for lead in c.get("leaders") or []:
@@ -155,6 +158,7 @@ def game_context(ev: dict) -> dict:
         indoor = True
     return {"event_id": str(ev.get("id") or ""), "kickoff_iso": ev.get("date"),
             "home": teams.get("home"), "away": teams.get("away"), "team_ids": ids, "passers": passers,
+            "names": names,
             "venue": venue.get("fullName"), "city": addr.get("city"), "state": addr.get("state"),
             "country": addr.get("country"), "indoor": indoor if isinstance(indoor, bool) else None,
             "neutral": comp.get("neutralSite"), "conference_game": comp.get("conferenceCompetition"),

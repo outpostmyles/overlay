@@ -92,4 +92,5 @@ NHL = register(SportAdapter(
     aliases=_ALIASES,
     results_window_days=10,            # daily slates, like MLB: a tight window keeps the ESPN sweep small
     pair_only_key=False,               # the pair repeats across a season: key on pair + date
+    research="hockey",                 # moneyline factors tracked first (backend/research.py)
 ))

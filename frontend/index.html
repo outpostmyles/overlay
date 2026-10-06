@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=20261008" />
+  <link rel="stylesheet" href="/styles.css?v=20261009" />
 </head>
 <body>
   <!-- icon sprite -->
@@ -63,6 +63,7 @@
     <nav class="rail">
       <button class="tab active" data-tab="picks"><svg class="ico"><use href="#i-picks"/></svg><span class="label">Best Bets</span></button>
       <button class="tab" data-tab="ledger"><svg class="ico"><use href="#i-track"/></svg><span class="label">Model Ledger</span></button>
+      <button class="tab" data-tab="slip"><svg class="ico"><use href="#i-bets"/></svg><span class="label">Bet Slip</span></button>
       <button class="tab" data-tab="top"><svg class="ico"><use href="#i-smart"/></svg><span class="label">Top Bettors</span></button>
       <button class="tab" data-tab="research"><svg class="ico"><use href="#i-analyze"/></svg><span class="label">Research</span></button>
       <button class="tab" data-tab="track"><svg class="ico"><use href="#i-track"/></svg><span class="label">Track Record</span></button>
@@ -85,6 +86,11 @@
       <section id="tab-ledger" class="panel">
         <p class="hint">A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (before lineups leak): the model's call on the match result plus total goals, each team's goals, both-teams-to-score, and total corners, with the de-vigged market line on the 1X2 frozen at the same instant as the benchmark. After the game every line is graded against the result, right or wrong. The 1X2 also scores the <b>model</b> against the market on calibration (does it add anything over the sharp line). Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw); corners grade only with an API-Football key. Small sample, exploratory: the model-vs-market aggregate stays hidden until enough games settle, and none of this should be used to retune the model.</p>
         <div id="ledger-body"></div>
+      </section>
+
+      <section id="tab-slip" class="panel">
+        <p class="hint">Where the board turns into bets. <b>Value now</b> lists every line where a real price (DraftKings, or Kalshi after its fee) beats the Research % by enough to matter. The <b>parlay checker</b> shows the true chance a parlay hits and whether your book's payout is worth it. <b>My bets</b> logs what you actually bet and grades it against the closing line, the best long-run measure of skill.</p>
+        <div id="slip-body"></div>
       </section>
 
       <section id="tab-top" class="panel">
@@ -112,6 +118,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261008"></script>
+  <script src="/app.js?v=20261009"></script>
 </body>
 </html>
