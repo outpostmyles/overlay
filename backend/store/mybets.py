@@ -129,7 +129,7 @@ def validate(payload: dict, games: dict) -> tuple[list, int, float, str]:
         if kind not in KINDS:
             raise ValueError("a leg is a moneyline, spread or total")
         leg = {"dedup": x["dedup"], "team_a": g["team_a"], "team_b": g["team_b"], "date": g.get("date"),
-               "kickoff_iso": g.get("kickoff_iso"), "kind": kind}
+               "kickoff_iso": g.get("kickoff_iso"), "kind": kind, "sport": g.get("sport") or active().key}
         if kind in ("ml", "spread"):
             if x.get("team") not in (g["team_a"], g["team_b"]):
                 raise ValueError("pick one of the two teams")
@@ -157,13 +157,15 @@ def log_bet(payload: dict, games: dict) -> dict:
         leg["p_log"] = leg_prob(games[leg["dedup"]], leg, research=True)
     p_log = _product([l["p_log"] for l in legs])
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    leg_sports = {l["sport"] for l in legs}
+    sport = leg_sports.pop() if len(leg_sports) == 1 else "multi"     # a cross-sport ticket shows on every board
     with _conn() as c:
         cur = c.execute("INSERT INTO my_bets (sport, logged_at, book, stake, price, legs_json, p_log) "
                         "VALUES (?,?,?,?,?,?,?)",
-                        (active().key, now, book, stake, price, json.dumps(legs),
+                        (sport, now, book, stake, price, json.dumps(legs),
                          round(p_log, 4) if p_log is not None else None))
         bet_id = cur.lastrowid
-    return next(b for b in list_bets() if b["id"] == bet_id)
+    return list_bets(bet_id=bet_id)[0]          # by id: a ticket of another board's games files under that board
 
 
 def _grade(leg: dict, row: sqlite3.Row) -> str | None:
@@ -228,10 +230,14 @@ def settle() -> int:
     return done
 
 
-def list_bets() -> list[dict]:
+def list_bets(bet_id: int | None = None) -> list[dict]:
+    """This board's bets plus every cross-sport ticket, open first (or just the bet `bet_id`)."""
     with _conn() as c:
-        rows = c.execute("SELECT * FROM my_bets WHERE sport=? ORDER BY status='open' DESC, logged_at DESC",
-                         (active().key,)).fetchall()
+        if bet_id is not None:
+            rows = c.execute("SELECT * FROM my_bets WHERE id=?", (bet_id,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM my_bets WHERE sport IN (?, 'multi') "
+                             "ORDER BY status='open' DESC, logged_at DESC", (active().key,)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -258,4 +264,5 @@ def summary(bets: list[dict]) -> dict:
 
 def delete(bet_id: int) -> bool:
     with _conn() as c:
-        return c.execute("DELETE FROM my_bets WHERE id=? AND sport=?", (bet_id, active().key)).rowcount > 0
+        return c.execute("DELETE FROM my_bets WHERE id=? AND sport IN (?, 'multi')",
+                         (bet_id, active().key)).rowcount > 0

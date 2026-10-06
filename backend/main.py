@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import aggregator, config, futures_read, propread, sports
-from .store import leans, mybets, paper
+from .store import leans, livelegs, mybets, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
@@ -161,8 +161,10 @@ async def add_mybet(payload: dict) -> dict:
     line}], price (American), stake, book}. It is priced against the board the owner was looking at."""
     if not aggregator.LAST_GAMES:
         await aggregator.build_snapshot()
+    # this board's games, plus every other running board's, so a weekend ticket can mix sports
+    games = {**livelegs.games_by_dedup(livelegs.read_all()), **aggregator.LAST_GAMES}
     try:
-        return mybets.log_bet(payload, aggregator.LAST_GAMES)
+        return mybets.log_bet(payload, games)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

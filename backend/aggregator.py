@@ -15,13 +15,13 @@ from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
-from . import config, memory, picks, reasoning, research, smartmoney, sports
+from . import config, lotto, memory, picks, reasoning, research, smartmoney, sports
 from .engine import edges, odds_math
 from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, toptraders, weather
-from .store import leans, mybets, paper
+from .store import leans, livelegs, mybets, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
                      "props_fresh": 0.0}   # wall-clock of the last real (non-fallback) props pull
@@ -2078,7 +2078,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                     g["market"] = line.get((frozenset((g["team_a"], g["team_b"])), g["date"]))
                 picks_board["top_traders"] = top
             # every live game, priced for the bet slip (value now, parlays, logging a bet)
-            live = [{"dedup": c["dedup_key"], "team_a": c["team_a"], "team_b": c["team_b"],
+            live = [{"sport": sports.active().key, "dedup": c["dedup_key"], "team_a": c["team_a"],
+                     "team_b": c["team_b"],
                      "date": c["commence_time"], "kickoff_iso": fboard[c["dedup_key"]]["kickoff_iso"],
                      "market": fboard[c["dedup_key"]]["market"], "legs": fboard[c["dedup_key"]]["legs"],
                      "research": fboard[c["dedup_key"]].get("research"),
@@ -2088,6 +2089,14 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             LAST_GAMES.update({g["dedup"]: g for g in live})
             picks_board["value_now"] = _value_now(live)
             picks_board["slip_games"] = [_slip_game(g) for g in sorted(live, key=lambda g: g.get("kickoff_iso") or "9999")]
+            # publish this board's games for the others, then pool every running board's for the weekend
+            # lotto: a 15-leg ticket can mix the NFL, college, the NHL and MLB
+            livelegs.write(sports.active().key, live, picks_board.get("team_names") or {})
+            boards = livelegs.read_all()
+            picks_board["lotto"] = {"legs": lotto.candidates(boards),
+                                    "boards": {k: {"games": len(b.get("games") or []),
+                                                   "age_min": round((time.time() - b["ts"]) / 60)}
+                                               for k, b in boards.items()}}
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)

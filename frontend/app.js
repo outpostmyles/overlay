@@ -104,6 +104,7 @@ function renderAll() {
   renderPicks();
   renderLedger();
   renderSlip();
+  renderLotto();
   renderTopBettors();
   renderResearch();
   renderFutures();
@@ -707,7 +708,7 @@ function _slipLoad() {
   return state.slip;
 }
 function _slipSave() { try { localStorage.setItem(_slipKey(), JSON.stringify(state.slip)); } catch (e) { /* private mode: the slip still works for this visit */ } }
-const _legLabel = (l) => l.kind === "ml" ? `${teamName(l.team)} ML`
+const _legLabel = (l) => l.label ? l.label : l.kind === "ml" ? `${teamName(l.team)} ML`
   : l.kind === "spread" ? `${teamName(l.team)} ${l.line > 0 ? "+" : ""}${l.line}`
   : `${l.dir === "over" ? "Over" : "Under"} ${l.line}`;
 const _legId = (l) => [l.dedup, l.kind, l.team || l.dir, l.line].join("|");
@@ -750,7 +751,7 @@ function _parlayHTML(slip, games) {
   const sameGame = new Set(legs.map((l) => l.dedup)).size < legs.length;
   const verdict = ev == null ? "" : ev >= 0.02 ? `<span class="ev pos">${_evTxt(ev)} expected: worth it</span>`
     : ev >= 0 ? `<span class="ev">${_evTxt(ev)} expected: too thin</span>` : `<span class="ev neg">${_evTxt(ev)} expected: not worth it</span>`;
-  const legRows = legs.length ? legs.map((l) => `<div class="vn-row"><span><b>${esc(_legLabel(l))}</b> <span class="muted">${esc(teamName(l.team_a || ""))}${l.team_a ? " v " + esc(teamName(l.team_b)) : ""}</span></span><span class="vn-r"><span class="muted">${l.p ? (l.p * 100).toFixed(1) + "%" : "-"}</span><button class="act tiny" data-slip-rm="${esc(_legId(l))}">×</button></span></div>`).join("")
+  const legRows = legs.length ? legs.map((l) => `<div class="vn-row"><span>${l.sport && l.sport !== ((state.snapshot || {}).meta || {}).sport ? `<span class="tb-plat p">${esc(l.sport.toUpperCase())}</span> ` : ""}<b>${esc(_legLabel(l))}</b> <span class="muted">${l.game ? esc(l.game) : esc(teamName(l.team_a || "")) + (l.team_a ? " v " + esc(teamName(l.team_b)) : "")}</span></span><span class="vn-r"><span class="muted">${l.p ? (l.p * 100).toFixed(1) + "%" : "-"}</span><button class="act tiny" data-slip-rm="${esc(_legId(l))}">×</button></span></div>`).join("")
     : `<div class="muted" style="padding:6px 2px">Add legs from Value now or from the games below.</div>`;
   const stats = P ? `<div class="summary lg-score slip-stats">
       <div class="stat"><div class="label">Chance all hit</div><div class="val">${(P * 100).toFixed(1)}%</div></div>
@@ -859,6 +860,105 @@ document.addEventListener("input", (e) => {
     renderSlip(true);
     const el = document.getElementById("slip-filter"); if (el) { el.focus(); el.setSelectionRange(pos, pos); }
   }
+});
+
+// ---------- render: Lotto (fun-money 10-20 leg weekend parlays from sensible legs) ----------
+const _LOTTO_FLAGS = { heavy: ["heavy favorite", "trk"], value: ["value at DraftKings", "adj"], top: ["top bettors' side", "trk"],
+                       research: ["research: wind", "adj"], no_report: ["no injury report", "cau"] };
+function _lottoState() {
+  if (!state.lotto) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("overlay_lotto") || "null"); } catch (e) { saved = null; }
+    state.lotto = { n: 12, stake: 2, off: [], picked: [], ...(saved || {}) };
+  }
+  return state.lotto;
+}
+function _lottoSave() { try { localStorage.setItem("overlay_lotto", JSON.stringify(state.lotto)); } catch (e) { /* this visit only */ } }
+// up to n legs from the pool in `rank` order, one per game (two legs from one game move together)
+function _lottoPick(pool, n, rank, seed = []) {
+  const out = [...seed], used = new Set(seed.map((l) => l.dedup));
+  for (const leg of [...pool].sort(rank)) {
+    if (out.length >= n) break;
+    if (used.has(leg.dedup)) continue;
+    out.push(leg); used.add(leg.dedup);
+  }
+  return out;
+}
+function _lottoTickets(pool, n) {
+  const val = (l) => ((l.flags || []).includes("value") ? 0.03 : 0);   // a priced edge earns its place first
+  const near = (t) => (a, b) => (Math.abs(a.p - t) - val(a)) - (Math.abs(b.p - t) - val(b));
+  const research = pool.filter((l) => (l.flags || []).includes("research")).slice(0, 2);
+  const ml = pool.filter((l) => l.kind === "ml");
+  return [
+    { key: "safe", name: `Safest ${n}`, sub: "the most likely legs on the board", legs: _lottoPick(ml, n, (a, b) => (b.p + val(b)) - (a.p + val(a))) },
+    { key: "mid", name: `Middle ${n}`, sub: "favorites around 80%", legs: _lottoPick(ml, n, near(0.80)) },
+    { key: "long", name: `Long shot ${n}`, sub: "favorites around 70%, plus the research legs", legs: _lottoPick(ml, n, near(0.70), research) },
+  ];
+}
+function _lottoStats(legs, stake) {
+  const P = legs.reduce((a, l) => a * l.p, 1);
+  const dkAll = legs.length && legs.every((l) => l.dk);
+  const dkDec = dkAll ? legs.reduce((a, l) => a * _amToDec(l.dk), 1) : null;
+  return { P, oneIn: Math.round(1 / P), fair: stake / P, dk: dkDec ? stake * dkDec : null, ev: dkDec ? P * dkDec - 1 : null };
+}
+function _lottoCard(t, stake, n) {
+  if (!t.legs.length) return "";
+  const st = _lottoStats(t.legs, stake);
+  const short = t.legs.length < n ? `<div class="cal-note muted"><span>Only ${t.legs.length} sensible legs this weekend so far; more fill in as games get closer.</span></div>` : "";
+  const legs = t.legs.map((l) => `<div class="lt-leg"><span><span class="tb-plat p">${esc(l.sport.toUpperCase())}</span> <b>${esc(l.label)}</b> <span class="muted">${esc(l.game)} · ${_koLabel(l.kickoff_iso)}</span>
+      ${(l.flags || []).filter((f) => f !== "heavy").map((f) => `<span class="rchip ${(_LOTTO_FLAGS[f] || [])[1] || ""}">${esc((_LOTTO_FLAGS[f] || [f])[0])}</span>`).join(" ")}</span>
+      <span class="lt-p">${Math.round(l.p * 100)}%</span></div>`).join("");
+  const dk = st.dk != null ? `<div class="rs-line">DraftKings would pay about <b>$${st.dk.toFixed(0)}</b> <span class="ev ${st.ev >= 0 ? "pos" : "neg"}">${_evTxt(st.ev)} expected</span></div>` : "";
+  return `<div class="fcard lt-card">
+    <div class="fcard-h"><span class="fcard-m"><b>${esc(t.name)}</b> <span class="muted">· ${esc(t.sub)}</span></span></div>
+    <div class="lt-hero"><span class="lt-odds">1 in ${st.oneIn.toLocaleString()}</span><span class="muted">${(st.P * 100).toFixed(st.P < 0.01 ? 2 : 1)}% to hit</span></div>
+    <div class="rs-line">$${stake} pays about <b>$${st.fair.toFixed(0)}</b> at fair odds <span class="muted">(${_amer(_decToAm(1 / st.P))})</span></div>
+    ${dk}${short}
+    <div class="lt-legs">${legs}</div>
+    <button class="btn lt-load" data-lotto-load="${t.key}">Load into Bet Slip</button>
+  </div>`;
+}
+function renderLotto() {
+  const box = $("#lotto-body"); if (!box) return;
+  const lotto = (state.snapshot && state.snapshot.picks && state.snapshot.picks.lotto) || null;
+  if (!lotto) { box.innerHTML = `<div class="muted" style="padding:14px">The lotto builder fills in once the boards have games this weekend.</div>`; return; }
+  const ls = _lottoState();
+  const boards = Object.keys(lotto.boards || {}).sort();
+  const pool = (lotto.legs || []).filter((l) => !ls.off.includes(l.sport));
+  const tickets = _lottoTickets(pool, ls.n);
+  state.lottoTickets = tickets;
+  const controls = `<div class="slip-form lt-controls">
+      <label>Legs <select id="lotto-n">${[10, 12, 14, 15, 16, 18, 20].map((k) => `<option ${k === ls.n ? "selected" : ""}>${k}</option>`).join("")}</select></label>
+      <label>Stake <select id="lotto-stake">${[2, 3].map((k) => `<option value="${k}" ${k === ls.stake ? "selected" : ""}>$${k}</option>`).join("")}</select></label>
+      <span class="lt-sports">${boards.map((b) => `<label class="lt-sport"><input type="checkbox" data-lotto-sport="${esc(b)}" ${ls.off.includes(b) ? "" : "checked"}> ${esc(b.toUpperCase())} <span class="muted">${lotto.boards[b].games}</span></label>`).join("")}</span>
+    </div>`;
+  const note = `<div class="cal-note muted"><span>Every leg here is a favorite the market prices fairly on average (the 25-year NFL test found no hidden favorite edge), so a long ticket is a lottery ticket, not an investment. A sportsbook also pays less than fair on parlays because each leg's margin compounds. Expect to lose most weekends; keep it to fun money. <b>${pool.length}</b> sensible legs this weekend across ${boards.length} board${boards.length === 1 ? "" : "s"}.</span></div>`;
+  box.innerHTML = controls + note + `<div class="fgrid lt-grid">${tickets.map((t) => _lottoCard(t, ls.stake, ls.n)).join("")}</div>`
+    + (pool.length ? "" : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`);
+}
+document.addEventListener("change", (e) => {
+  const ls = state.lotto; if (!ls) return;
+  if (e.target.id === "lotto-n") { ls.n = parseInt(e.target.value, 10); _lottoSave(); renderLotto(); }
+  else if (e.target.id === "lotto-stake") { ls.stake = parseInt(e.target.value, 10); _lottoSave(); renderLotto(); }
+  else if (e.target.dataset && e.target.dataset.lottoSport) {
+    const sp = e.target.dataset.lottoSport;
+    ls.off = e.target.checked ? ls.off.filter((x) => x !== sp) : [...ls.off, sp];
+    _lottoSave(); renderLotto();
+  }
+});
+document.addEventListener("click", (e) => {
+  const load = e.target.closest("[data-lotto-load]");
+  if (!load) return;
+  const t = (state.lottoTickets || []).find((x) => x.key === load.getAttribute("data-lotto-load"));
+  if (!t) return;
+  const slip = _slipLoad();
+  slip.legs = t.legs.map((l) => ({ dedup: l.dedup, kind: l.kind, team: l.team, dir: l.dir, line: l.line, p: l.p,
+                                   team_a: l.team_a, team_b: l.team_b, label: l.label, game: l.game, sport: l.sport }));
+  slip.stake = String(state.lotto.stake);
+  slip.price = "";
+  _slipSave();
+  switchTab("slip");
+  renderSlip(true);
 });
 
 // ---------- render: Top Bettors (what the leaderboards' best sports traders hold on this board) ----------
