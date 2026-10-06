@@ -153,6 +153,11 @@ def test_a_leg_without_a_book_price_is_estimated_at_the_weekends_typical_margin(
     t = lotto.build_ticket([bare] + pool[1:], 1, 1000)
     assert t["dk_priced"] == 2 and t["dk_price"] is None                   # no single price until all are priced
     assert lotto.typical_cost([]) == lotto.TYPICAL_COST
+    # heavy favorites carry more margin per unit than moderate prices, so an estimate looks near its price
+    mixed = [_priced(i, p, cost=0.15) for i, p in enumerate((0.88, 0.86, 0.84))] \
+        + [_priced(10 + i, p, cost=0.05) for i, p in enumerate((0.66, 0.64, 0.62, 0.6))]
+    assert abs(lotto.typical_cost(mixed, 0.85) - 0.15) < 0.01 and abs(lotto.typical_cost(mixed, 0.63) - 0.05) < 0.01
+    assert abs(lotto.typical_cost(mixed, 0.75) - 0.05) < 0.01                # too few near it: the overall median
 
 
 def test_the_research_construction_opens_with_the_flagged_legs():

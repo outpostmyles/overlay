@@ -10,7 +10,7 @@ the most, since it takes so many of them to build a payout: in NFL closing money
 priced 80% or more carried about 2 to 5 times the margin per unit of payout of legs from 35% to 70%
 (depending on how the margin is split between the two sides), and DraftKings' college favorites run
 higher still. So every ticket is built to reach its payout at DraftKings' prices (a leg without one is
-estimated at the weekend's typical margin), three ways, tracked side by side:
+estimated at the weekend's typical margin for its price), three ways, tracked side by side:
 
   - "efficient": the legs that lose the least to the book per unit of payout, every one priced at
     DraftKings, with up to two moderate underdogs among them. A leg a real price pays more than it is
@@ -83,19 +83,23 @@ def leg_cost(p: float, american: int | None) -> float | None:
     return round(-math.log(p * d) / math.log(d), 4)
 
 
-def typical_cost(pool: list[dict]) -> float:
-    """The weekend's median margin per unit of payout across priced legs: the estimate for a leg the book
-    has no price on yet."""
-    costs = [leg["cost"] for leg in pool if leg.get("cost") is not None]
-    return min(max(median(costs), 0.02), 0.20) if costs else TYPICAL_COST
+def typical_cost(pool: list[dict], p: float | None = None) -> float:
+    """The weekend's median margin per unit of payout across priced legs, from the legs priced near `p` when
+    there are at least three (heavy favorites carry far more margin per unit than moderate prices): the
+    estimate for a leg the book has no price on yet."""
+    costs = [(leg["p"], leg["cost"]) for leg in pool if leg.get("cost") is not None]
+    near = [c for q, c in costs if p is not None and abs(q - p) <= 0.08]
+    pick = near if len(near) >= 3 else [c for _, c in costs]
+    return min(max(median(pick), 0.02), 0.20) if pick else TYPICAL_COST
 
 
 def book_decimal(leg: dict, cost: float) -> float:
-    """The leg's DraftKings decimal price, or an estimate at margin `cost` per unit of payout, from
-    -ln(p) = (1 + cost) x ln(d)."""
+    """The leg's DraftKings decimal price, or an estimate at its own estimated margin (`est_cost`, set by
+    candidates) or else `cost` per unit of payout, from -ln(p) = (1 + cost) x ln(d)."""
     if leg.get("dk"):
         return american_to_decimal(leg["dk"])
-    return (1 / leg["p"]) ** (1 / (1 + cost))
+    c = leg.get("est_cost")
+    return (1 / leg["p"]) ** (1 / (1 + (cost if c is None else c)))
 
 
 def _p_over(leg: dict, key: str) -> float | None:
@@ -177,6 +181,9 @@ def candidates(boards: dict, now: datetime | None = None) -> list[dict]:
                             "p": round(r_over if d == "over" else 1 - r_over, 4),
                             "label": f"{d.title()} {leg['line']:g}", "dk": None, "dk_ev": None, "cost": None,
                             "flags": ["research"]})
+    for leg in out:
+        if leg.get("cost") is None:
+            leg["est_cost"] = typical_cost(out, leg["p"])
     out.sort(key=lambda x: -x["p"])
     return out
 

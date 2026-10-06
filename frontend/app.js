@@ -892,7 +892,7 @@ function _lottoTicketHTML(t) {
   const pay = t.dk_payout || t.fair_payout;
   const cut = t.dk_payout && t.fair_payout ? Math.round((1 - t.dk_payout / t.fair_payout) * 100) : null;
   const miss = t.reached ? "" : `<div class="cal-note">${ico("shield")} <span>No 20 sensible legs pay ${_money0(t.target)} at the book this weekend yet. This is the biggest one there is; more games fill in as the week goes on.</span></div>`;
-  const est = exact ? "" : ` <span class="muted">(${n - (t.dk_priced || 0)} leg${n - (t.dk_priced || 0) === 1 ? "" : "s"} without a DraftKings price yet, estimated at this weekend's typical margin)</span>`;
+  const est = exact ? "" : ` <span class="muted">(${n - (t.dk_priced || 0)} leg${n - (t.dk_priced || 0) === 1 ? "" : "s"} without a DraftKings price yet, estimated at this weekend's typical margin for the price)</span>`;
   const book = cut != null ? `<div class="rs-line">Fair odds would pay ${_money0(t.fair_payout)}; the book keeps about <b>${cut}%</b> of this ticket's value${est}.</div>` : "";
   const how = t.variant === "efficient" ? `<div class="cal-note muted"><span>Legs picked to lose the least to the book for each dollar of payout: mid-priced favorites, ${t.dogs ? `${t.dogs} moderate underdog${t.dogs === 1 ? "" : "s"} (35% to 50%)` : "and up to two moderate underdogs when DraftKings prices them near our number"}, and any leg priced above our number first. Heavy favorites cost the most per dollar of payout, so they only top a ticket off.</span></div>` : "";
   return `<div class="fcard lt-card">
