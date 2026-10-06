@@ -73,3 +73,4 @@ def test_nginx_routes_every_board_to_the_port_its_unit_listens_on():
     # the trailing slash strips the board's prefix: /nfl/api/snapshot reaches the board as /api/snapshot
     assert "proxy_pass http://127.0.0.1:${port}/;" in script
     assert "text/javascript" in script                                  # app.js's type on Python 3.12
+    assert "location = /favicon.ico" in script and "location / { return 302 /; }" in script

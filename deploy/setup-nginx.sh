@@ -64,6 +64,10 @@ ${AUTH}
         error_page 502 503 504 = @door;       # the archive is down: the first board in order instead
     }
     location @door { return 302 /nfl/; }
+    # the page carries its own icon; browsers still ask the site root for one
+    location = /favicon.ico { access_log off; log_not_found off; return 204; }
+    # anything else (a mistyped board, an old link) goes to the front door
+    location / { return 302 /; }
 ${LOCATIONS}
 }
 NGINX

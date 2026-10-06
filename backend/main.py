@@ -56,7 +56,11 @@ async def _start_heartbeat() -> None:
 
 async def _heartbeat_loop() -> None:
     interval = max(60, config.HEARTBEAT_INTERVAL_SECONDS)
-    await asyncio.sleep(5)        # let startup settle before the first refresh
+    # let startup settle, then stagger the boards: they restart together and share one IP, and five
+    # boards pulling Kalshi in the same second is what draws its rate limit
+    order = sports.BOARD_ORDER
+    key = sports.active().key
+    await asyncio.sleep(5 + 45 * (order.index(key) if key in order else 0))
     while True:
         try:
             # force=True re-pulls the free feeds ONLY; refresh_odds/reason stay False so no money is spent

@@ -6,7 +6,9 @@ Prices are in cents (0-100) == probability * 100.
 """
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 
 import httpx
 
@@ -46,30 +48,69 @@ def _prob(dollars) -> float | None:
         return None
 
 
-async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "open") -> list[dict]:
-    out: list[dict] = []
+class _Rows(list):
+    """A series' markets, and whether every page arrived (a partial pull is not the market)."""
+    ok = True
+
+
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_RETRY_DELAYS = (1.5, 4.0)                 # then give up; the board keeps the series' last good pull
+# the last complete pull of each series, so a refused request (Kalshi rate-limits bursts: four boards
+# share one IP) shows the board's markets as of a few minutes ago instead of dropping them for a cycle
+_LAST_GOOD: dict = {}
+LAST_GOOD_SECONDS = 15 * 60
+SERIES_PAUSE = 0.25
+
+
+async def _get_page(client: httpx.AsyncClient, params: dict) -> dict:
+    """One page of markets, retried on a rate limit or a server error (honoring Retry-After, capped)."""
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        resp = await client.get(f"{config.KALSHI_API}/markets", params=params,
+                                headers={"Accept": "application/json"}, timeout=25)
+        if resp.status_code in _RETRY_STATUS and attempt < len(_RETRY_DELAYS):
+            try:
+                wait = min(float(resp.headers.get("retry-after") or _RETRY_DELAYS[attempt]), 8.0)
+            except ValueError:
+                wait = _RETRY_DELAYS[attempt]
+            await asyncio.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    raise RuntimeError("unreachable")
+
+
+async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "open") -> _Rows:
+    out = _Rows()
     cursor = None
+    await asyncio.sleep(SERIES_PAUSE)          # pace the pulls: a burst is what draws a 429
     for _ in range(20):  # safety cap on pagination
         params = {"series_ticker": series, "limit": 1000, "status": status}
         if cursor:
             params["cursor"] = cursor
         try:
-            resp = await client.get(
-                f"{config.KALSHI_API}/markets",
-                params=params,
-                headers={"Accept": "application/json"},
-                timeout=25,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            data = await _get_page(client, params)
         except Exception as exc:  # noqa: BLE001
             print(f"[kalshi] {series} fetch failed: {exc}")
+            out.ok = False
             break
         out.extend(data.get("markets") or [])
         cursor = data.get("cursor")
         if not cursor:
             break
     return out
+
+
+async def _series_or_last_good(client: httpx.AsyncClient, series: str) -> list[dict]:
+    """A series' open markets; when the pull fails, its last complete pull if that is recent."""
+    raw = await _fetch_series(client, series)
+    if getattr(raw, "ok", True):
+        _LAST_GOOD[series] = (time.monotonic(), list(raw))
+        return raw
+    kept = _LAST_GOOD.get(series)
+    if kept and time.monotonic() - kept[0] <= LAST_GOOD_SECONDS:
+        print(f"[kalshi] {series}: keeping the last good pull ({int(time.monotonic() - kept[0])}s old)")
+        return kept[1]
+    return raw
 
 
 # market types parsed one-market-PER-LINE: each child (e.g. "Over 8.5 runs", "Judge: 2+ HR") is its own
@@ -170,7 +211,7 @@ async def fetch(client: httpx.AsyncClient) -> list[Market]:
     markets: list[Market] = []
     code_map: dict = TEAM_CODES
     for series, (mtype, group) in active().kalshi_series.items():
-        raw = await _fetch_series(client, series)
+        raw = await _series_or_last_good(client, series)
         if mtype in _PER_LINE_TYPES:
             for m in raw:
                 built = _per_line_market(m, series, mtype, group, code_map)

@@ -935,7 +935,8 @@ function renderLotto() {
   const ls = _lottoState();
   const t = (lotto.tickets || []).find((x) => x.stake === ls.stake && x.target === ls.target && x.variant === ls.variant);
   state.lottoTicket = t;
-  const boards = Object.keys(lotto.boards || {}).sort();
+  // the boards that fed this weekend's legs (a board with no games, like the World Cup archive, is not one)
+  const boards = [...new Set((lotto.legs || []).map((l) => l.sport))].sort();
   const controls = `<div class="slip-form lt-controls">
       <label>Stake <select id="lotto-stake">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === ls.stake ? "selected" : ""}>$${k}</option>`).join("")}</select></label>
       <label>Pays at least <select id="lotto-target">${[1000, 2500, 5000].map((k) => `<option value="${k}" ${k === ls.target ? "selected" : ""}>${_money0(k)}</option>`).join("")}</select></label>
