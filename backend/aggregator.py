@@ -1829,7 +1829,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             upcoming.sort(key=lambda c: (c.get("kickoff_iso") or "9999"))
             picks_board["model_ledger"] = {"rows": rows, "upcoming": upcoming,
                                            "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
-                                           "summary": paper.forecast_calibration()}
+                                           "summary": paper.forecast_calibration(),
+                                           "fav_price": paper.favorites_by_price()}
         except Exception as exc:  # noqa: BLE001
             print(f"[aggregator] model_ledger skipped: {exc}")
 

@@ -8,6 +8,9 @@ const el = (html) => { const t = document.createElement("template"); t.innerHTML
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (p) => (p == null ? "—" : (p * 100).toFixed(1) + "%");
 const sgn = (n) => (n > 0 ? "+" + n : "" + n);
+// the break-even American price for a fair probability: a book has to beat this for the bet to have value
+const fairAm = (p) => { const q = Math.min(Math.max(p, 0.01), 0.99);
+  return q >= 0.5 ? Math.round(-100 * q / (1 - q)) : Math.round(100 * (1 - q) / q); };
 const when = (t) => (t ? esc(t) : "");
 const ico = (name, cls = "ico") => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
 // XSS-safe minimal markdown: escape FIRST, then convert a whitelist (## headings, **bold**, *em*, breaks)
@@ -298,6 +301,26 @@ function _ledgerScore(s) {
   </div>
   <div class="cal-note muted">${esc(verdict)}. Exploratory: ${s.n} settled is a small sample with wide error bars. This measures the model, it is not a betting record, and it must never be used to retune the model. ${open}</div>`;
 }
+// how the market's favorite has done at each price, pooled across every sport in the ledger
+function _favPriceHTML(fp) {
+  if (!fp || !fp.n) return "";
+  const pct = (v) => (v != null ? v.toFixed(1) + "%" : "-");
+  const row = (b) => `<tr>
+    <td><b>${esc(b.label)}</b></td>
+    <td class="num">${b.n}</td>
+    <td class="num">${pct(b.said)}</td>
+    <td class="num">${pct(b.actual)}</td>
+    <td class="num">${b.n ? `${b.won} of ${b.n}` : "-"}</td></tr>`;
+  const h = fp.heavy;
+  const note = h && h.n
+    ? `Favorites at -233 or shorter have won <b>${h.won} of ${h.n}</b> against ${h.expected} expected. That pattern was spotted in the data before it was tested, so it is something to watch, not a proven edge; the football seasons will add hundreds of these games.`
+    : "";
+  return `<div class="pick-section"><h3>${ico("track")} Favorites by price <span class="muted">· every sport in the ledger, pooled (${fp.n} games)</span></h3>
+    <table><thead><tr><th>Favorite's price</th><th class="num">Games</th><th class="num">Market said</th><th class="num">Actually won</th><th class="num">Record</th></tr></thead>
+    <tbody>${fp.bands.map(row).join("")}</tbody></table>
+    ${note ? `<div class="cal-note">${ico("shield")} ${note}</div>` : ""}</div>`;
+}
+
 function renderLedger() {
   const box = $("#ledger-body"); if (!box) return;
   const ml = state.snapshot && state.snapshot.picks && state.snapshot.picks.model_ledger;
@@ -321,7 +344,8 @@ function renderLedger() {
   }
   const empty = (!cards.length && !settled.length)
     ? `<div class="muted" style="padding:14px">No forecasts yet. Each knockout game is logged here and freezes about ${ml.buffer_min || 75} minutes before kickoff.</div>` : "";
-  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + cardHtml + settledHtml + empty;
+  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + _favPriceHTML(ml.fav_price)
+    + cardHtml + settledHtml + empty;
 }
 
 function renderFutures() {
@@ -538,6 +562,8 @@ function betCard(c) {
   const price = c.best_american != null
     ? `<div class="bc-price">${ico("best")} best <b>${sgn(c.best_american)}</b> @ ${esc(c.best_book)}${c.ev_pct != null ? ` <span class="ev ${c.ev_pct > 0 ? "pos" : c.ev_pct < 0 ? "neg" : ""}">${c.ev_pct > 0 ? "+" : ""}${c.ev_pct}% vs fair</span>` : ""}</div>`
     : "";
+  const fair = c.market_prob != null
+    ? `<div class="bc-price">${ico("odds")} fair <b>${sgn(fairAm(c.market_prob))}</b> <span class="muted">· value only if your book pays better</span></div>` : "";
   const model = c.model_prob != null
     ? `<div class="bc-model">${ico("track")} model <b>${Math.round(c.model_prob * 100)}%</b> to hit ${modelChip(c.model_prob, c.model_value)}</div>` : "";
   const stake = c.stake_units
@@ -550,7 +576,7 @@ function betCard(c) {
     <div class="bc-sel">${esc(c.selection)}${gapChip} ${trap}</div>
     <div class="bc-meta">${esc(c.match || "")}${c.days_out != null ? " · " + dateLabel(c.days_out) : ""}</div>
     <div class="bc-why">${mdLite(c.reasoning || "")}</div>
-    ${price}${model}${stake}${mem}${research}
+    ${fair}${price}${model}${stake}${mem}${research}
   </div>`;
 }
 
@@ -587,9 +613,10 @@ function kalshiPropsHTML(rows) {
     <td><b>${esc(r.player)}</b><div class="muted tiny">${esc(r.event || "")}</div></td>
     <td>${esc(r.stat)} <b>${r.line != null ? Math.ceil(r.line) : ""}+</b></td>
     <td class="num">${Math.round(r.over_fair * 100)}%</td>
+    <td class="num">${sgn(fairAm(r.over_fair))} / ${sgn(fairAm(1 - r.over_fair))}</td>
     <td class="muted">${r.days_out != null ? dateLabel(r.days_out) : ""}</td></tr>`;
-  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· de-vigged Kalshi fair probability per line (free, no key); research reads, auto-grading coming</span></h3>
-    <table><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th>When</th></tr></thead>
+  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· de-vigged Kalshi fair probability per line (free, no key); hold your book's price on the same line against the fair odds</span></h3>
+    <table><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th class="num">Fair odds (over / under)</th><th>When</th></tr></thead>
     <tbody>${rows.slice(0, 40).map(tr).join("")}</tbody></table></div>`;
 }
 

@@ -966,6 +966,46 @@ def list_forecasts() -> list[dict]:
     return out
 
 
+# Price bands for the favorites tracker, labelled the way the bets are placed (American odds).
+_FAV_BANDS = ((0.50, 0.60, "-100 to -150"), (0.60, 0.70, "-150 to -233"),
+              (0.70, 0.75, "-233 to -300"), (0.75, 1.01, "-300 or shorter"))
+
+
+def favorites_by_price() -> dict:
+    """How the market's favorite has done at each price, pooled across EVERY sport in the ledger, not just
+    the board asking. A 75% favorite is a 75% favorite in any sport, and pooling is the only way the heavy
+    end gets a usable sample: through the MLB season and the World Cup, favorites at 70% or more had won
+    24 of 25 against 18.5 expected. That was spotted in the data before it was tested, so it is a
+    hypothesis to watch, and the football seasons will add hundreds of heavy favorites to settle it.
+    One row per settled game: the side the market favored at lock (a favored draw is skipped)."""
+    with _conn() as c:
+        rows = c.execute("SELECT COALESCE(sport, 'wc26') s, market_a, market_draw, market_b, actual_outcome "
+                         "FROM forecasts WHERE status='settled' AND actual_outcome IS NOT NULL").fetchall()
+    games = []
+    for r in rows:
+        opts = [("a", r["market_a"]), ("b", r["market_b"])] + ([("draw", r["market_draw"])] if r["market_draw"] else [])
+        side, p = max(opts, key=lambda x: x[1] or 0)
+        if side == "draw" or not p:
+            continue
+        games.append((r["s"], p, 1 if r["actual_outcome"] == side else 0))
+
+    def band(lo, hi, label):
+        g = [x for x in games if lo <= x[1] < hi]
+        n = len(g)
+        won = sum(x[2] for x in g)
+        exp = sum(x[1] for x in g)
+        var = sum(x[1] * (1 - x[1]) for x in g)
+        sports: dict = {}
+        for x in g:
+            sports[x[0]] = sports.get(x[0], 0) + 1
+        return {"label": label, "lo": round(lo * 100), "n": n, "won": won, "expected": round(exp, 1),
+                "said": round(exp / n * 100, 1) if n else None, "actual": round(won / n * 100, 1) if n else None,
+                "z": round((won - exp) / var ** 0.5, 2) if var else None, "sports": sports}
+
+    return {"bands": [band(*b) for b in _FAV_BANDS], "heavy": band(0.70, 1.01, "-233 or shorter"),
+            "n": len(games)}
+
+
 def forecast_calibration() -> dict:
     """Scorecard over the ACTIVE sport's SETTLED forecasts. Where a model exists (wc26) it is the
     paired model-vs-market comparison; anchor-only sports get the market's own calibration (Brier +
