@@ -189,7 +189,9 @@ def catalog(sport: str) -> list[dict]:
         if key not in _SPORT_FACTORS.get(sport, set()):
             continue
         mode = "adjusts" if key in adjusts else "caution" if key in caution else "tracks"
-        out.append({"key": key, "name": name, "detail": detail, "history": history_note(key),
+        # the history file is 25 years of NFL games: it speaks for the football boards only
+        out.append({"key": key, "name": name, "detail": detail,
+                    "history": history_note(key) if sport in ("nfl", "cfb") else None,
                     "source": SOURCES.get(src), "mode": mode})
     return out
 
@@ -298,7 +300,7 @@ def evaluate(sport: str, ctx: dict | None, market: tuple, legs: list[dict], team
         total_leg["research_prob"] = round(r_over if total_leg.get("side") == "over" else 1 - r_over, 4)
         for k in weather_keys:
             direction = "over" if WEATHER_ADJ[k] > 0 else "under"
-            label = f"Wind {round(float(wx['wind_mph']))} mph" if k.startswith("wind") else "Rain"
+            label = f"Wind {math.floor(float(wx['wind_mph']))} mph" if k.startswith("wind") else "Rain"
             adjusts = nfl and WEATHER_ADJ[k] != 0
             factors.append(_factor(
                 k, label, "adjust" if adjusts else "track",
@@ -312,7 +314,7 @@ def evaluate(sport: str, ctx: dict | None, market: tuple, legs: list[dict], team
     elif weather_keys:
         # no total leg to grade against: still show the weather on the card
         for k in weather_keys:
-            label = f"Wind {round(float(wx['wind_mph']))} mph" if k.startswith("wind") else "Rain"
+            label = f"Wind {math.floor(float(wx['wind_mph']))} mph" if k.startswith("wind") else "Rain"
             factors.append(_factor(k, label, "track"))
 
     # -- passing props: the book-history under, and the same under in real wind or rain ----------------- #

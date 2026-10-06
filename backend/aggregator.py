@@ -107,6 +107,11 @@ def _in_scope(m) -> bool:
     return bool(teams & keep)
 
 
+def free_age_seconds() -> float:
+    """Seconds since the free feeds were last pulled (infinite before the first pull)."""
+    return time.monotonic() - _free_cache["ts"] if _free_cache.get("ts") else float("inf")
+
+
 async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
     if not _free_cache["loaded"]:
         _free_cache["props"], _free_cache["props_fresh"] = _load_props_disk()   # survive a restart mid-block
@@ -1931,6 +1936,34 @@ async def futures_scenario(pins: list[dict]) -> dict:
 # --------------------------------------------------------------------------- #
 # Build the snapshot served to the dashboard
 # --------------------------------------------------------------------------- #
+LEDGER_SETTLED_SHOWN = 60          # graded cards the page shows; the tallies cover every graded game
+
+
+def _ledger_rows(rows: list[dict]) -> dict:
+    """The ledger rows the page shows: every locked game and the most recent graded ones, without the raw
+    JSON columns the parsed fields already carry (a season of MLB was 2 MB, refetched every minute). The
+    per-market tallies are counted over every graded game, so trimming the cards never trims the record."""
+    settled = [r for r in rows if r["status"] == "settled"]
+    shown = {r["id"] for r in sorted(settled, key=lambda r: (r.get("commence_time") or "", r["id"]),
+                                     reverse=True)[:LEDGER_SETTLED_SHOWN]}
+    slim = [{k: v for k, v in r.items() if k not in ("legs_json", "research_json")}
+            for r in rows if r["status"] != "settled" or r["id"] in shown]
+    tally: dict = {}
+    perf = {"n": 0, "base": 0, "perf": 0}
+    for r in settled:
+        for leg in r.get("legs") or []:
+            if leg.get("result") not in ("won", "lost"):
+                continue
+            t = tally.setdefault(leg.get("key"), [0, 0])
+            t[0] += leg["result"] == "won"
+            t[1] += 1
+            if leg.get("perf_result") and leg.get("key") in ("total_goals", "team_total"):
+                perf["n"] += 1
+                perf["base"] += leg["result"] == "won"
+                perf["perf"] += leg["perf_result"] == "won"
+    return {"rows": slim, "settled_total": len(settled), "leg_tally": tally, "perf_tally": perf}
+
+
 def _boards_meta() -> list[dict]:
     """Every board on the site, for the switcher: its address, label, and games coming up (from the boards'
     shared live files, so a board that is not running shows none)."""
@@ -1976,7 +2009,9 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     picks_board = picks.generate(markets, props, model, config, smart)
     # de-vigged Kalshi player props (free, no key): display + research rows; grading lands with the
     # ESPN player-line extraction. Empty for sports whose adapter lists no player_prop series.
-    picks_board["kalshi_props"] = _kalshi_props_board(markets)
+    props_all = _kalshi_props_board(markets)
+    picks_board["kalshi_props"] = props_all[:40]          # the page shows the 40 soonest; the count says how many
+    picks_board["kalshi_props_total"] = len(props_all)
 
     # Finished games (goals + free ESPN box stats: possession, corners, shots, SOT). Fetched here so the
     # corners model and the prediction sheet can use measured territory/volume. Cached, reused below.
@@ -2075,7 +2110,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                         for c in fcands
                         if c["dedup_key"] not in frozen and not fboard[c["dedup_key"]]["missed"]]
             upcoming.sort(key=lambda c: (c.get("kickoff_iso") or "9999"))
-            picks_board["model_ledger"] = {"rows": rows, "upcoming": upcoming,
+            picks_board["model_ledger"] = {**_ledger_rows(rows), "upcoming": upcoming,
                                            "buffer_min": config.FORECAST_LOCK_BUFFER_MINUTES,
                                            "summary": paper.forecast_calibration(),
                                            "fav_price": paper.favorites_by_price()}
@@ -2113,7 +2148,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                                    "age_min": round((time.time() - b["ts"]) / 60)}
                                                for k, b in boards.items()}}
             try:
-                # the record: freeze this weekend's $2 tickets on Saturday morning, grade every leg after
+                # the record: freeze this weekend's $5 tickets on Saturday morning, grade every leg after
                 lottotrack.maybe_freeze([t for t in picks_board["lotto"]["tickets"] if t["stake"] == lotto.TRACK_STAKE],
                                         end, lotto.freeze_at(end), now_utc)
                 lottotrack.settle()
@@ -2121,6 +2156,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                 picks_board["lotto"]["study"] = lottotrack.study()
             except Exception as exc:  # noqa: BLE001  (the lotto record never costs the board a cycle)
                 print(f"[lotto] record skipped: {exc}")
+            # the page gets each ticket's legs by position in the pool, not 45 full copies of them
+            picks_board["lotto"]["tickets"] = lotto.by_reference(picks_board["lotto"]["tickets"], pool)
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)
@@ -2200,10 +2237,13 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     }
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "meta": {
             "sport": sports.active().key,
             "sport_name": sports.active().display_name,
             "boards": _boards_meta(),
+            "archived": bool(getattr(sports.active(), "archived", False)),
+            "paper_picks": paper.count_picks(),
             "capabilities": sorted(caps),
             "model_loaded": model is not None,
             "sources_live": sources_live,

@@ -1170,3 +1170,10 @@ def summary() -> dict:
             "model_calibration": model_calibration(),
             "start_bankroll": round(config.BANKROLL, 2), "bankroll": bankroll,
             "bankroll_curve": curve, "unit_dollars": round(config.BANKROLL * config.UNIT_PCT, 2)}
+
+
+def count_picks() -> int:
+    """How many paper picks this board has logged (the page hides Track Record where there are none)."""
+    clause, params = _sport_clause()
+    with _conn() as c:
+        return c.execute(f"SELECT COUNT(*) FROM paper_picks WHERE {clause}", params).fetchone()[0]

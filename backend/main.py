@@ -119,12 +119,19 @@ async def futures_scenario_ep(payload: dict) -> dict:
     return await aggregator.futures_scenario(payload.get("pins") or [])
 
 
+FORCE_MIN_SECONDS = 60
+
+
 @app.get("/api/snapshot")
 async def snapshot(force: bool = False, refresh_odds: bool = False,
                    reason: bool = False) -> JSONResponse:
     """force=true re-pulls the FREE feeds; refresh_odds=true spends Odds API credits (moneyline lines
     for the whole slate + total-corner lines for the near slate, ~1 credit each); reason=true runs AI
     analysis (a few cents) on uncached matches and commits the slate's picks to the ledger."""
+    # Refresh is public: a forced re-pull within a minute of the last one is served from the cache, so a
+    # few clicks cannot hammer Kalshi (the feeds' own cache is a minute, and the heartbeat pulls every five)
+    if force and not refresh_odds and not reason and aggregator.free_age_seconds() < FORCE_MIN_SECONDS:
+        force = False
     try:
         data = await aggregator.build_snapshot(force=force, refresh_odds=refresh_odds, reason=reason)
     except Exception as exc:  # noqa: BLE001

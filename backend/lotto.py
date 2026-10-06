@@ -110,10 +110,12 @@ def _p_over(leg: dict, key: str) -> float | None:
 
 
 def candidates(boards: dict, now: datetime | None = None) -> list[dict]:
-    """Every sensible leg through the coming weekend, most likely first. `boards` is livelegs.read_all():
-    each sport's live games plus its team display names."""
+    """Every sensible leg of the coming weekend, most likely first. `boards` is livelegs.read_all(): each
+    sport's live games plus its team display names. The weekend starts at the Saturday freeze: a weekday
+    game can never be on the ticket that freezes and gets graded, so it is never on the one shown either."""
     now = now or datetime.now(timezone.utc)
     end = weekend_end(now)
+    start = max(now, freeze_at(end))
     out = []
     for sport, board in boards.items():
         names = board.get("names") or {}
@@ -123,7 +125,7 @@ def candidates(boards: dict, now: datetime | None = None) -> list[dict]:
 
         for g in board.get("games") or []:
             ko = _parse(g.get("kickoff_iso"))
-            if not ko or not now < ko <= end:
+            if not ko or not start <= ko <= end or ko <= now:
                 continue
             rs = g.get("research") or {}
             if "qb" in (rs.get("uncertain") or []):
@@ -308,3 +310,11 @@ def tickets(pool: list[dict]) -> list[dict]:
     """Every stake, target and construction for the live pool (the page picks one to show)."""
     cost = typical_cost(pool)
     return [build_ticket(pool, s, t, v, cost=cost) for s in STAKES for t in TARGETS for v in VARIANTS]
+
+
+def by_reference(tickets: list[dict], pool: list[dict]) -> list[dict]:
+    """The tickets as the page receives them: each leg named by its position in the pool (legs carry their
+    own copies only in the frozen record), so 45 tickets do not repeat the same leg dicts hundreds of times."""
+    at = {id(leg): i for i, leg in enumerate(pool)}
+    return [{**{k: v for k, v in t.items() if k != "legs"}, "leg_ids": [at[id(leg)] for leg in t["legs"]]}
+            for t in tickets]

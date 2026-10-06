@@ -162,10 +162,23 @@ main { margin-left: var(--rail); padding: 28px 32px 90px; max-width: 1220px; min
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .hint { color: var(--muted); font: 12.5px/1.6 var(--font-ui); max-width: 780px; margin: 0 0 18px; }
 .hint b { color: var(--text-dim); }
+/* a tab's method, folded under its one-sentence intro */
+.hint details.how { display: inline; }
+.hint details.how > summary { display: inline; cursor: pointer; color: var(--accent2); font-weight: 600; list-style: none; white-space: nowrap; }
+.hint details.how > summary::-webkit-details-marker { display: none; }
+.hint details.how > summary::after { content: ' ▸'; }
+.hint details.how[open] > summary::after { content: ' ▾'; }
+.hint details.how > div { margin-top: 8px; }
+.lt-how { margin: 4px 0 6px; }
+.lt-how > summary { cursor: pointer; font: 12px var(--font-ui); color: var(--accent2); list-style: none; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.lt-how > summary::-webkit-details-marker { display: none; }
+.lt-how[open] .ico-chev { transform: rotate(90deg); }
+.archive-card { padding: 16px 18px; }
+.arch-final { font: 600 20px var(--font-display); margin: 8px 0 10px; }
 code { background: var(--surface2); color: var(--accent-bright); padding: 1px 6px; border-radius: 5px; font: 12px var(--font-mono); }
 
 /* ------------------------------------------------------------------ tables */
-main table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; }
+main table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: clip; }   /* clip, not hidden: hidden makes each table a scroll box, and its sticky header then sits 58px down inside it */
 thead th { position: sticky; top: var(--head); background: var(--surface2); color: var(--muted); font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .07em; text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 th.num { text-align: right; }
 table.flat thead th { position: static; }   /* short tables: a sticky header would sit over row one */
@@ -194,7 +207,7 @@ tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .card .when { color: var(--muted); font: 11px var(--font-mono); }
 
 /* badges */
-.tag { font: 600 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 5px; background: var(--surface3); color: var(--muted); }
+.tag { font: 600 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 5px; background: var(--surface3); color: var(--muted); white-space: nowrap; }
 .tag.won { background: rgba(60,200,120,.15); color: var(--positive); }
 .tag.lost { background: rgba(230,90,90,.15); color: var(--negative); }
 tr.lean-settled td { opacity: .72; }
@@ -291,6 +304,7 @@ tr.lean-settled td { opacity: .72; }
 .tier { font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; padding: 3px 8px; border-radius: 6px; }
 .tier-strong { background: rgba(61,214,140,.15); color: var(--positive); }
 .tier-lean { background: rgba(90,169,255,.13); color: var(--accent2); }
+.tier-favorite { background: var(--surface3); color: var(--muted); }
 .bet-card .ai-research { margin-top: 11px; }
 .bc-price { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.05); font: 12px var(--font-mono); color: var(--text-dim); }
 .bc-price .ico { width: 13px; height: 13px; color: var(--accent2); }
@@ -354,6 +368,7 @@ tr.lean-settled td { opacity: .72; }
 /* calibration note */
 .cal-note { display: flex; align-items: center; gap: 7px; font: 11.5px/1.5 var(--font-ui); color: var(--accent2); background: rgba(90,169,255,.07); border: 1px solid rgba(90,169,255,.16); border-radius: 8px; padding: 8px 11px; margin-bottom: 10px; }
 .cal-note .ico { width: 13px; height: 13px; flex: none; }
+.cal-note > span, .cal-note > div { flex: 1; min-width: 0; }
 .cal-note b { color: var(--text); }
 
 /* per-prop reads */
@@ -485,7 +500,7 @@ input::placeholder { color: var(--muted); }
 /* prediction sheet: the model's explicit best guess on each market, one row per prop */
 .preds { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,.06); display: flex; flex-direction: column; gap: 3px; }
 .pred { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: baseline; }
-.pred-l { font: 11.5px var(--font-ui); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pred-l { font: 11.5px var(--font-ui); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }   /* a long prop name wraps instead of hiding its stat */
 .pred-g { font: 11px var(--font-mono); color: var(--text); text-align: right; white-space: nowrap; }
 .pred-c { font: 10.5px var(--font-mono); color: var(--muted); width: 34px; text-align: right; }
 .pred-a { font: 11px var(--font-mono); color: var(--muted); text-align: right; white-space: nowrap; min-width: 58px; }
@@ -540,7 +555,7 @@ td .rchip { margin-left: 4px; }
 .lt-leg { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 12px; line-height: 1.5; }
 .lt-p { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
 .lt-load { margin-top: 10px; width: 100%; justify-content: center; }
-.lt-card { margin-top: 12px; }
+.lt-card { margin-top: 12px; margin-bottom: 18px; }
 .lt-week { margin-top: 8px; }
 .lt-wk { font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 2px; }
 /* top bettors */
@@ -584,8 +599,14 @@ td .rchip { margin-left: 4px; }
   .board { height: 28px; font-size: 9.5px; }
   .board-name { display: none; }
 }
+@media (max-width: 760px) {
+  #meta-updated { display: none; }
+  .status { flex-wrap: nowrap; }
+}
 /* phones: stop the card grids overflowing — single column */
 @media (max-width: 600px) {
+  header { padding: 0 12px; }
+  .status .pill { display: none; }
   .bet-grid, .fade-grid, .track-stream, .today-grid, .summary { grid-template-columns: 1fr; }
   main { padding: 18px 12px 56px; }
   .bankroll-hero { flex-direction: column; align-items: stretch; }

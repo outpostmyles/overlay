@@ -50,25 +50,57 @@ async function loadPaper() {
 // ---------- render: top-level ----------
 // Ledger explainer for the anchor-only sports (no model): the sharp market line IS the forecast.
 // The World Cup keeps the default text in index.html, which describes its model-vs-market sheet.
+// a tab's intro: one plain sentence, with the method folded under "How this works"
+const _hint = (lead, more) => `${lead} <details class="how"><summary>How this works</summary><div>${more}</div></details>`;
 const ANCHOR_HINTS = {
-  mlb: `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
-  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main spread and total, and a prop sheet built from the five props that matter (passing, rushing and receiving yards, receptions, and anytime TD): the starting QBs, the lead backs, the featured receivers, and the likeliest scorers. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. Beside it sits the <b>research</b>: what betting research says about the game, checked against every NFL closing line since 1999. Only wind and rain move a number (the total); the moneyline stays the market's, because 25 years of closes showed it priced right on average. Everything else (heavy favorites, QB status, rest, travel, the top bettors' side) is shown and graded in the Research study below, so the record shows what deserves weight.`,
-  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline, the main spread, and the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. Beside it sits the <b>research</b>: what betting research says about the game. Nothing moves a college number yet (the NFL test found the moneyline priced right, and college weather is graded first); heavy favorites, weather, big spreads, rest and the top bettors' side are shown and graded in the Research study below before they earn weight.`,
-  nhl: `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
+  mlb: _hint(`Every game's line, frozen about 75 minutes before first pitch and graded off the final: the de-vigged market's moneyline, total, first five innings and key player props.`, `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`),
+  nfl: _hint(`Every game's line, frozen about 75 minutes before kickoff (after inactives) and graded off the final: the de-vigged market's moneyline, spread, total and the props that matter, with the research beside it.`, `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main spread and total, and a prop sheet built from the five props that matter (passing, rushing and receiving yards, receptions, and anytime TD): the starting QBs, the lead backs, the featured receivers, and the likeliest scorers. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. Beside it sits the <b>research</b>: what betting research says about the game, checked against every NFL closing line since 1999. Only wind and rain move a number (the total); the moneyline stays the market's, because 25 years of closes showed it priced right on average. Everything else (heavy favorites, QB status, rest, travel, the top bettors' side) is shown and graded in the Research study below, so the record shows what deserves weight.`),
+  cfb: _hint(`Every Power 4 and Notre Dame game's line, frozen about 75 minutes before kickoff and graded off the final: the de-vigged market's moneyline, spread and total, with the research beside it.`, `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline, the main spread, and the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. Beside it sits the <b>research</b>: what betting research says about the game. Nothing moves a college number yet (the NFL test found the moneyline priced right, and college weather is graded first); heavy favorites, weather, big spreads, rest and the top bettors' side are shown and graded in the Research study below before they earn weight.`),
+  nhl: _hint(`Every game's line, frozen about 75 minutes before puck drop and graded off the final: the de-vigged market's moneyline and total, with the research beside it.`, `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`),
 };
+
+const RESEARCH_HINTS = {
+  nfl: _hint("What the research says about this week's games, how each factor has done against the market, and the de-vigged Kalshi price on every player prop.",
+    "A factor <b>adjusts</b> the Research % only where 25 years of NFL closing lines show the market misprices it (today: wind and rain on totals). Everything else is <b>tracked</b>: shown on the game, graded, and left out of the number until it earns its place. Player props are Kalshi's prices with the vig removed: hold your book's price on the same line against the fair odds."),
+  cfb: _hint("What the research says about this week's games and how each factor has done against the market.",
+    "Nothing moves a college number yet: heavy favorites, weather, big spreads, rest and the top bettors' side are shown on each game and graded against the market's price before they earn weight."),
+  nhl: _hint("What the research says about each game (heavy favorites, back-to-backs, the top bettors' side) and how each has done against the market.",
+    "Nothing moves a hockey number yet: every factor is tracked, shown on the game and graded against the market's price before it earns weight."),
+  mlb: _hint("The de-vigged Kalshi price on every player prop line, and the market's clear favorites.",
+    "Kalshi's prices with the vig removed are the sharp fair probability on each line. Hold your book's price on the same line against the fair odds: value only exists where the book pays more."),
+};
+const _BOARD_NAMES = { nfl: "NFL", cfb: "College Football", nhl: "NHL", mlb: "MLB", wc: "World Cup 2026" };
+// name the board from its address before the data arrives, so it never flashes as another sport
+(() => { const seg = location.pathname.split("/")[1]; const n = _BOARD_NAMES[seg];
+  if (n) { const b = document.getElementById("sport-badge"); if (b) b.textContent = n; document.title = `Overlay · ${n}`; } })();
+// "updated 4:21 PM": the snapshot's UTC stamp in the viewer's own time, like every kickoff on the page
+const _updatedLabel = (s) => { const d = new Date(s.generated_iso || "");
+  return isNaN(d) ? s.generated_at : d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); };
+const _showTab = (name, on) => { const b = document.querySelector(`.tab[data-tab="${name}"]`); if (b) b.style.display = on ? "" : "none"; };
 
 function renderAll() {
   const s = state.snapshot; if (!s) return;
   const m = s.meta;
-  $("#meta-updated").textContent = "updated " + s.generated_at;
-  setPill("pill-pm", m.sources_live.polymarket);
+  const pk = s.picks || {};
+  $("#meta-updated").textContent = "updated " + _updatedLabel(s);
+  // the sources this board actually reads: DraftKings arrives free through ESPN, and Polymarket's
+  // wallets feed Top Bettors even where its prices do not set the line; no model, no Model pill
+  const dkLive = (pk.best_bets || []).some((c) => c.dk_price != null)
+    || ((pk.model_ledger || {}).upcoming || []).some((r) => r.research && r.research.dk);
+  const pmLive = m.sources_live.polymarket || !!(((pk.top_traders || {}).meta || {}).poly_traders);
+  setPill("pill-pm", pmLive);
   setPill("pill-kalshi", m.sources_live.kalshi);
-  setPill("pill-books", m.sources_live.sportsbooks);
+  setPill("pill-books", m.sources_live.sportsbooks || dkLive);
+  $("#pill-books").textContent = m.sources_live.sportsbooks ? "Sportsbooks" : "DraftKings";
   setPill("pill-model", m.model_loaded);
+  $("#pill-model").style.display = m.model_loaded ? "" : "none";
+  // controls that need a key the public site does not have stay out of the way
+  $("#refresh-ai").style.display = m.ai_enabled ? "" : "none";
 
   // sportsbook odds credit meter (rail footer)
   const od = m.odds || {};
   const oc = $("#odds-credits"), btn = $("#refresh-odds"), meter = $("#odds-meter"), fill = $("#odds-meter-fill");
+  document.querySelector(".rail-foot").style.display = od.enabled ? "" : "none";
   if (!od.enabled) {
     oc.textContent = "no API key";
     oc.classList.remove("low"); meter.classList.remove("low"); fill.style.width = "0";
@@ -81,26 +113,28 @@ function renderAll() {
     fill.style.width = (left != null ? Math.max(2, Math.min(100, (left / 500) * 100)) : 0) + "%";
     btn.disabled = false;
   }
-  // capability-gated tabs: anchor-only sports (MLB) have no futures bracket to show
-  const caps = (s.meta && s.meta.capabilities) || null;
-  if (caps) {
-    const fut = document.querySelector('[data-tab="futures"]');
-    if (fut) fut.style.display = caps.includes("futures") ? "" : "none";
-  }
+  // tabs a board cannot fill stay hidden: futures need a bracket; the finished World Cup has no live
+  // lines to bet, parlay or research; Track Record only fills where the AI logs picks
+  const caps = (s.meta && s.meta.capabilities) || [];
+  const archived = !!m.archived;
+  _showTab("futures", caps.includes("futures"));
+  ["slip", "lotto", "research"].forEach((t) => _showTab(t, !archived));
+  _showTab("top", !archived && !!pk.top_traders);
+  _showTab("track", !!m.ai_enabled || (m.paper_picks || 0) > 0);
+  const picksLabel = document.querySelector('.tab[data-tab="picks"] .label');
+  if (picksLabel) picksLabel.textContent = archived ? "Final results" : "Best Bets";
+  const activeBtn = document.querySelector(`.tab[data-tab="${state.tab}"]`);
+  if (activeBtn && activeBtn.style.display === "none") switchTab("picks");
   renderBoards(s.meta);
   // the header names the active sport (the app is multi-sport now)
   if (s.meta && s.meta.sport_name) {
     const badge = document.getElementById("sport-badge");
-    if (badge && badge.textContent !== s.meta.sport_name) {
-      badge.textContent = s.meta.sport_name;
-      document.title = `Overlay · ${s.meta.sport_name}`;
-    }
-    const hint = document.querySelector("#tab-ledger .hint");
-    const anchorHint = ANCHOR_HINTS[s.meta.sport];
-    if (hint && anchorHint && hint.dataset.sport !== s.meta.sport) {
-      hint.dataset.sport = s.meta.sport;
-      hint.innerHTML = anchorHint;
-    }
+    if (badge) badge.textContent = s.meta.sport_name;
+    document.title = `Overlay · ${s.meta.sport_name}`;
+    [["#tab-ledger .hint", ANCHOR_HINTS], ["#tab-research .hint", RESEARCH_HINTS]].forEach(([sel, hints]) => {
+      const hint = document.querySelector(sel), text = hints[s.meta.sport];
+      if (hint && text && hint.dataset.sport !== s.meta.sport) { hint.dataset.sport = s.meta.sport; hint.innerHTML = text; }
+    });
   }
   renderPicks();
   renderLedger();
@@ -140,16 +174,19 @@ function renderLeans(leans) {
 }
 
 // ---------- render: Model Ledger (pre-kickoff 1X2 forecasts, model vs market, graded) ----------
-const _koLabel = (iso) => {
+const _koLabel = (iso, tbd) => {
   if (!iso) return "TBD";
   const d = new Date(iso);
   if (isNaN(d)) return esc(iso.slice(0, 16));
+  if (tbd) return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }) + ", time TBD";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " +
     d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 };
 // a 2-way sport (no draw) shows "62 / 38"; soccer keeps its three outcomes
-const _trip = (p) => (p[1] ? `${Math.round(p[0] * 100)} / ${Math.round(p[1] * 100)} / ${Math.round(p[2] * 100)}`
-  : `${Math.round(p[0] * 100)} / ${Math.round(p[2] * 100)}`);
+const _split = (p) => { const a = Math.round(p[0] * 100);
+  if (!p[1]) return [a, 0, 100 - a];
+  const d = Math.round(p[1] * 100); return [a, d, 100 - a - d]; };
+const _trip = (p) => { const [a, d, b] = _split(p); return p[1] ? `${a} / ${d} / ${b}` : `${a} / ${b}`; };
 const _legHead = (a, b, p) => `<div class="fcard-leg muted"><span>${esc(teamName(a))}</span>${p && p[1] ? "<span>Draw</span>" : ""}<span>${esc(teamName(b))}</span></div>`;
 // stacked 1X2 bar: team-A win | draw | team-B win
 function _triBar(p, a, b) {
@@ -184,6 +221,8 @@ const _predActual = (l) => l.result === "pending" ? "awaiting"
   : l.key === "btts" ? (l.actual === "yes" ? "Yes" : "No")
   : l.key === "spread" ? (l.actual > 0 ? `${teamName(l.team)} by ${l.actual}`
                           : l.actual < 0 ? `${teamName(l.opp)} by ${-l.actual}` : "Tie")
+  : l.result === "void" ? "void (did not play)"
+  : l.key === "f5" ? (l.actual === "tie" ? "Tie" : teamName(l.actual))
   : String(l.actual);
 function _predRowsInner(legs, graded) {
   return (legs || []).map((l) => {
@@ -210,15 +249,16 @@ function _predRowsInner(legs, graded) {
   }).join("");
 }
 // forward scoreboard: goals-only model vs the perf-aware variant on the goals legs that carry both
-function _perfScore(settled) {
+function _perfScore(settled, perf) {
   let go = 0, gn = 0, po = 0;
-  settled.forEach((r) => (r.legs || []).forEach((l) => {
+  if (perf) { go = perf.base; gn = perf.n; po = perf.perf; }
+  else settled.forEach((r) => (r.legs || []).forEach((l) => {
     if (l.perf_result && (l.result === "won" || l.result === "lost") && (l.key === "total_goals" || l.key === "team_total")) {
       gn++; if (l.result === "won") go++; if (l.perf_result === "won") po++;
     }
   }));
   if (gn < 1) return "";
-  return `<div class="cal-note muted">Model variant test (goals legs): goals-only <b>${go}/${gn}</b> vs perf-aware <b>${po}/${gn}</b>. A forward-graded experiment (finishing regressed toward shot volume); not yet conclusive.</div>`;
+  return `<div class="cal-note muted"><span>Model variant test (goals legs): goals-only <b>${go}/${gn}</b> vs perf-aware <b>${po}/${gn}</b>. A forward-graded experiment (finishing regressed toward shot volume); not yet conclusive.</span></div>`;
 }
 // per-prop prediction list inside a card: upcoming shows our guess + confidence; settled shows pick vs actual
 function _predRows(legs, graded) {
@@ -240,19 +280,20 @@ function _matchResultRow(r) {
   return `<div class="pred pred-result ${hit ? "pred-won" : "pred-lost"}"><span class="pred-l">${label}</span><span class="pred-g">${esc(called)}</span><span class="pred-a">${esc(actual)} ${mark}</span></div>`;
 }
 // per-market hit rate across settled games (only counts legs that actually graded)
-function _legAccuracy(settled) {
+function _legAccuracy(settled, tally0) {
   const names = { total_goals: _totalUnit() === "goals" ? "Total goals" : "Totals", team_total: "Team totals",
                   btts: "BTTS", corners: "Corners", player_prop: "Player props", f5: "First 5",
                   spread: "Spreads" };
   const tally = {};
-  settled.forEach((r) => (r.legs || []).forEach((l) => {
+  if (tally0) Object.entries(tally0).forEach(([k, v]) => { tally[k] = { w: v[0], n: v[1] }; });
+  else settled.forEach((r) => (r.legs || []).forEach((l) => {
     if (l.result !== "won" && l.result !== "lost") return;
     const t = tally[l.key] || (tally[l.key] = { w: 0, n: 0 });
     t.n++; if (l.result === "won") t.w++;
   }));
-  const cells = ["total_goals", "team_total", "btts", "corners", "player_prop", "f5"].filter((k) => tally[k])
+  const cells = ["spread", "total_goals", "team_total", "btts", "corners", "player_prop", "f5"].filter((k) => tally[k])
     .map((k) => `<span class="leg-acc"><b>${names[k]}</b> ${tally[k].w}/${tally[k].n}</span>`);
-  return cells.length ? `<div class="cal-note muted">Our picks vs result: ${cells.join(" · ")}</div>` : "";
+  return cells.length ? `<div class="cal-note muted"><span>Our picks vs result: ${cells.join(" · ")}</span></div>` : "";
 }
 // ---------- research layer (football): the market line plus the research, as a graded Research % ----------
 const _amer = (n) => (n == null ? "-" : (n > 0 ? "+" + n : "" + n));
@@ -295,7 +336,8 @@ function _rowResearch(r) {
 }
 
 function _forecastCard(c) {
-  const badge = c.frozen
+  const badge = c.postponed ? `<span class="tag" title="ESPN lists this game as postponed or canceled; it voids">postponed</span>`
+    : c.frozen
     ? `<span class="tag pin" title="frozen ${esc(c.lock_ts || "")}">locked</span>`
     : `<span class="tag" title="live line, not yet part of the record">preview</span>`;
   const hasModel = c.model && c.model[0] != null;   // anchor-only sports lock the market line alone
@@ -305,7 +347,7 @@ function _forecastCard(c) {
   const modelRow = hasModel
     ? `<div class="fcard-row"><span class="fcard-t">Model</span>${_triBar(c.model, c.a, c.b)}<span class="fcard-n">${_trip(c.model)}</span></div>` : "";
   return `<div class="fcard">
-    <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(c.a))}</b> <span class="muted">v</span> <b>${esc(teamName(c.b))}</b></span><span class="fcard-k muted">${_koLabel(c.kickoff_iso)} ${badge}${gapChip}</span></div>
+    <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(c.a))}</b> <span class="muted">v</span> <b>${esc(teamName(c.b))}</b></span><span class="fcard-k muted">${_koLabel(c.kickoff_iso, c.time_tbd)} ${badge}${gapChip}</span></div>
     ${_legHead(c.a, c.b, c.market)}
     ${modelRow}
     <div class="fcard-row"><span class="fcard-t">Market</span>${_triBar(c.market, c.a, c.b)}<span class="fcard-n">${_trip(c.market)}</span></div>
@@ -323,7 +365,9 @@ function _settledCard(r) {
   const brier = (hasModel && r.brier_model != null && r.brier_market != null)
     ? `<div class="fcard-brier muted" title="model 1X2 Brier vs the market frozen at lock (lower is better)">1X2 Brier ${r.brier_model.toFixed(2)} <span class="${r.brier_model < r.brier_market ? "pos" : "neg"}">vs market ${r.brier_market.toFixed(2)}</span></div>`
     : (r.brier_market != null
-      ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}${r.closing_a != null ? ` · closed ${Math.round(r.closing_a * 100)}/${Math.round((r.closing_draw || 0) * 100)}/${Math.round(r.closing_b * 100)}` : ""}</div>` : "");
+      ? `<div class="fcard-brier muted" title="the de-vigged market line's Brier on this game (lower is better)">Market Brier ${r.brier_market.toFixed(2)}${r.closing_a != null ? ` · closed ${_trip([r.closing_a, r.closing_draw || 0, r.closing_b]).replace(/ /g, "")}` : ""}</div>` : "");
+  const mktRow = hasModel && r.market_a != null
+    ? `<div class="fcard-row"><span class="fcard-t">Market</span>${_triBar([r.market_a, r.market_draw || 0, r.market_b], r.team_a, r.team_b)}<span class="fcard-n">${_trip([r.market_a, r.market_draw || 0, r.market_b])}</span></div>` : "";
   const rs = _rowResearch(r);
   const rsMoved = rs && [0, 1, 2].some((i) => Math.abs((rs.probs[i] || 0) - ([r.market_a, r.market_draw || 0, r.market_b][i] || 0)) >= 0.005);
   const rsRow = rsMoved ? `<div class="fcard-row"><span class="fcard-t">Research</span>${_triBar(rs.probs, r.team_a, r.team_b)}<span class="fcard-n">${_trip(rs.probs)}</span></div>` : "";
@@ -332,7 +376,7 @@ function _settledCard(r) {
   return `<div class="fcard settled">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(r.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(r.team_b))}</b></span><span class="fcard-k"><b>${esc(score)}</b> <span class="muted">${esc((r.commence_time || "").slice(0, 10))}</span></span></div>
     ${_legHead(r.team_a, r.team_b, [r.market_a, r.market_draw, r.market_b])}
-    ${lineRow}${rsRow}
+    ${lineRow}${mktRow}${rsRow}
     ${rs ? _rsChips(rs.factors) : ""}
     <div class="preds">${_matchResultRow(r)}${_predRowsInner(r.legs, true)}</div>
     ${brier}${rsBrier}
@@ -346,14 +390,14 @@ function _ledgerScore(s) {
       const closeStat = (s.close_brier != null)
         ? `<div class="stat"><div class="label">Lock vs close Brier</div><div class="val">${s.lock_brier_on_closed} <span class="muted" style="font-size:13px">vs ${s.close_brier}</span></div></div>` : "";
       return `<div class="summary lg-score">
-        <div class="stat"><div class="label">Market Brier</div><div class="val">${s.market_brier}</div></div>
+        <div class="stat"><div class="label">Market Brier <span class="muted" title="summed over the outcomes: 0 is perfect; a coin-flip line on a two-way game scores 0.50">· coin flip 0.50</span></div><div class="val">${s.market_brier}</div></div>
         <div class="stat"><div class="label">Market favorite hit rate</div><div class="val">${s.market_hit_rate}%</div></div>
         ${closeStat}
         <div class="stat"><div class="label">Graded games</div><div class="val">${s.market_n}</div></div>
       </div>
-      <div class="cal-note muted">Anchor-only ledger: the de-vigged market line locks before each game and grades itself. No model rides here by design. ${open}</div>`;
+      <div class="cal-note muted"><span>Anchor-only ledger: the de-vigged market line locks before each game and grades itself. No model rides here by design. ${open}</span></div>`;
     }
-    return `<div class="cal-note">${ico("track")} <b>${s.market_n != null && s.n === 0 ? s.market_n : s.n}</b> of ${s.min_n} graded forecasts. Aggregate scores stay hidden until ${s.min_n} settle, so a couple of games cannot masquerade as a verdict. Each game below is still graded on its own. ${open}</div>`;
+    return `<div class="cal-note">${ico("track")}<span><b>${s.market_n != null && s.n === 0 ? s.market_n : s.n}</b> of ${s.min_n} graded games so far. The scorecard appears once ${s.min_n} settle, so a couple of games cannot pass for a verdict; each game below is graded on its own. ${open}</span></div>`;
   }
   const skill = s.skill_vs_market;
   const scls = skill == null ? "" : skill > 0 ? "pos" : "neg";
@@ -365,7 +409,7 @@ function _ledgerScore(s) {
     <div class="stat"><div class="label">Winner hit rate</div><div class="val">${s.hit_rate}%</div></div>
     <div class="stat"><div class="label">Model closer than market</div><div class="val">${s.beat_market}/${s.n}</div></div>
   </div>
-  <div class="cal-note muted">${esc(verdict)}. Exploratory: ${s.n} settled is a small sample with wide error bars. This measures the model, it is not a betting record, and it must never be used to retune the model. ${open}</div>`;
+  <div class="cal-note muted"><span>${esc(verdict)}. Exploratory: ${s.n} settled is a small sample with wide error bars. This measures the model, it is not a betting record, and it must never be used to retune the model. ${open}</span></div>`;
 }
 // how the market's favorite has done at each price, pooled across every sport in the ledger
 function _favPriceHTML(fp) {
@@ -382,14 +426,16 @@ function _favPriceHTML(fp) {
     ? `Favorites at -233 or shorter have won <b>${h.won} of ${h.n}</b> against ${h.expected} expected. That pattern was spotted in the data before it was tested, so it is something to watch, not a proven edge; the football seasons will add hundreds of these games.`
     : "";
   return `<div class="pick-section"><h3>${ico("track")} Favorites by price <span class="muted">· every sport in the ledger, pooled (${fp.n} games)</span></h3>
-    <table class="flat"><thead><tr><th>Favorite's price</th><th class="num">Games</th><th class="num">Market said</th><th class="num">Actually won</th><th class="num">Record</th></tr></thead>
-    <tbody>${fp.bands.map(row).join("")}</tbody></table>
+    <div class="tbl-scroll"><table class="flat"><thead><tr><th>Favorite's price</th><th class="num">Games</th><th class="num">Market said</th><th class="num">Actually won</th><th class="num">Record</th></tr></thead>
+    <tbody>${fp.bands.map(row).join("")}</tbody></table></div>
     ${note ? `<div class="cal-note">${ico("shield")} <span>${note}</span></div>` : ""}</div>`;
 }
 
 // the research layer's report card: Research % vs the market, then every factor's record against its price
 function _researchStudyHTML(st, cat) {
   if (!st && !cat) return "";
+  const sport = ((state.snapshot || {}).meta || {}).sport;
+  const football = sport === "nfl" || sport === "cfb";
   const n = st ? st.ml.n : 0, minN = (st && st.min_n) || 8;
   const pct = (v) => (v != null ? v.toFixed(1) + "%" : "-");
   const mode = { adjusts: "adjusts", tracks: "tracks", caution: "cushion" };
@@ -406,16 +452,20 @@ function _researchStudyHTML(st, cat) {
     head = `<div class="cal-note muted">${ico("track")} <span><b>${n}</b> of ${minN} graded games so far. The scorecard appears once ${minN} settle; each factor below fills in as games grade.</span></div>`;
   }
   const rows = (st && st.factors) || [];
-  const tbl = rows.length ? `<table class="flat"><thead><tr><th>Factor</th><th class="num">Graded</th><th class="num">Market said</th><th class="num">Research said</th><th class="num">Actually hit</th><th class="num">z</th></tr></thead><tbody>${rows.map((f) => `<tr>
+  const tbl = rows.length ? `<div class="tbl-scroll"><table class="flat"><thead><tr><th>Factor</th><th class="num">Graded</th><th class="num">Market said</th><th class="num">Research said</th><th class="num">Actually hit</th><th class="num">z</th></tr></thead><tbody>${rows.map((f) => `<tr>
       <td><b>${esc(f.name)}</b> <span class="rchip ${f.kind === "adjust" ? "adj" : "trk"}">${f.kind === "adjust" ? "adjusts" : "tracks"}</span></td>
       <td class="num">${f.n}</td><td class="num">${pct(f.crowd)}</td><td class="num">${pct(f.research)}</td>
       <td class="num">${pct(f.actual)} <span class="muted">(${f.hits}/${f.n})</span></td>
-      <td class="num ${f.z == null ? "" : f.z >= 2 ? "pos" : f.z <= -2 ? "neg" : ""}">${f.z == null ? "-" : f.z}</td></tr>`).join("")}</tbody></table>` : "";
+      <td class="num ${f.z == null ? "" : f.z >= 2 ? "pos" : f.z <= -2 ? "neg" : ""}">${f.z == null ? "-" : f.z}</td></tr>`).join("")}</tbody></table></div>` : "";
   const list = (cat || []).length ? `<details class="rs-notes"><summary>${ico("chevron", "ico ico-chev")} what the research layer checks, and why</summary>${cat.map((f) =>
     `<div class="rs-note"><b>${esc(f.name)}</b> <span class="rchip ${f.mode === "adjusts" ? "adj" : f.mode === "caution" ? "cau" : "trk"}">${mode[f.mode] || f.mode}</span><div>${esc(f.detail)}${f.source ? ` <a href="${esc(f.source)}" target="_blank" rel="noopener">source</a>` : ""}</div>${f.history ? `<div class="rs-hist">${esc(f.history)}</div>` : ""}</div>`).join("")}</details>` : "";
-  return `<div class="pick-section"><h3>${ico("track")} Research study <span class="muted">· Research % vs the market, and each factor's record against what the market priced (every football sport, pooled)</span></h3>
+  const pool = football ? "every football board, pooled" : "every board with research, pooled";
+  const note = football
+    ? `A factor <b>adjusts</b> the Research % only where the market misprices it against the closing line, checked on every NFL game since 1999: today that is wind on NFL totals, plus rain from a published study. The rest are <b>tracked</b>: shown, graded, and left out of the number. The favorite bias failed that test (favorites won about as often as the de-vigged close said), so it moved to tracked.`
+    : `Nothing adjusts the number on this board yet: every factor is <b>tracked</b>, shown on the game, graded, and left out of the number until it beats its price.`;
+  return `<div class="pick-section"><h3>${ico("track")} Research study <span class="muted">· each factor's record against what the market priced (${pool})</span></h3>
     ${head}${tbl}
-    <div class="cal-note muted"><span>A factor <b>adjusts</b> the Research % only where the market misprices it against the closing line, checked on every NFL game since 1999: today that is wind on NFL totals, plus rain from a published study. The rest are <b>tracked</b>: shown, graded, and left out of the number. The favorite bias failed that test (favorites won about as often as the de-vigged close said), so it moved to tracked. A z-score past +2 means a factor beat its price; near 0 means the market already prices it.</span></div>
+    <div class="cal-note muted"><span>${note} A z-score past +2 means a factor beat its price; near 0 means the market already prices it.</span></div>
     ${list}</div>`;
 }
 
@@ -427,25 +477,29 @@ function renderLedger() {
   const locked = rows.filter((r) => r.status === "locked").map((r) => ({
     a: r.team_a, b: r.team_b, model: [r.model_a, r.model_draw, r.model_b], legs: r.legs,
     market: [r.market_a, r.market_draw, r.market_b], kickoff_iso: r.kickoff_iso, frozen: true, lock_ts: r.lock_ts,
-    research: _rowResearch(r) }));
+    research: _rowResearch(r), postponed: !!r.likely_postponed, time_tbd: !!r.time_tbd }));
   const upcoming = (ml.upcoming || []).map((c) => ({
     a: c.team_a, b: c.team_b, model: c.model, market: c.market, legs: c.legs, kickoff_iso: c.kickoff_iso, frozen: false,
-    research: c.research }));
+    research: c.research, time_tbd: !!c.time_tbd }));
   const settled = rows.filter((r) => r.status === "settled");
-  const cards = locked.concat(upcoming);
+  const hasModel = !!((state.snapshot || {}).meta || {}).model_loaded;
+  // a game ESPN calls postponed or canceled waits after the live ones instead of heading the grid
+  const cards = locked.filter((c) => !c.postponed).concat(upcoming, locked.filter((c) => c.postponed));
   const cardHtml = cards.length
-    ? `<div class="pick-section"><h3>${ico("markets")} Forecasts <span class="muted">· locked freezes the line ${ml.buffer_min || 75} min before kickoff; preview is the live model line until then</span></h3><div class="fgrid">${cards.map(_forecastCard).join("")}</div></div>`
+    ? `<div class="pick-section"><h3>${ico("markets")} Forecasts <span class="muted">· locked freezes the line ${ml.buffer_min || 75} min before the start; preview is the live ${hasModel ? "model" : "market"} line until then</span></h3><div class="fgrid">${cards.map(_forecastCard).join("")}</div></div>`
     : "";
   let settledHtml = "";
   if (settled.length) {
-    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· what we predicted vs what happened, every line marked right or wrong; the 1X2 also scores the model against the market frozen at the same instant</span></h3>
-      ${_legAccuracy(settled)}${_perfScore(settled)}
+    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· what the line said vs what happened, every line marked right or wrong${hasModel ? "; the 1X2 also scores the model against the market frozen at the same instant" : ""}</span></h3>
+      ${_legAccuracy(settled, ml.leg_tally)}${_perfScore(settled, ml.perf_tally)}
+      ${ml.settled_total > settled.length ? `<div class="muted" style="padding:0 2px 8px">The ${settled.length} most recent of ${ml.settled_total} graded games; the scores above count all of them.</div>` : ""}
       <div class="fgrid">${settled.map(_settledCard).join("")}</div></div>`;
   }
   const empty = (!cards.length && !settled.length)
     ? `<div class="muted" style="padding:14px">No forecasts yet. Each knockout game is logged here and freezes about ${ml.buffer_min || 75} minutes before kickoff.</div>` : "";
-  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + _favPriceHTML(ml.fav_price)
-    + _researchStudyHTML(ml.research_study, ml.research_catalog) + cardHtml + settledHtml + empty;
+  // the research study lives on the Research tab now; the World Cup (no research) keeps nothing extra
+  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + cardHtml + settledHtml + empty
+    + _favPriceHTML(ml.fav_price);
 }
 
 function renderFutures() {
@@ -456,6 +510,12 @@ function renderFutures() {
     <textarea id="scout-notes" rows="2" placeholder="e.g. Spain flat, created nothing vs Cabo Verde; France clinical; Mexico crowd is a real factor">${esc(noteVal)}</textarea></div>`;
   if (!f.rows.length) {
     box.innerHTML = notes + `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
+    return;
+  }
+  if (f.archived) {
+    const fin = f.final || {};
+    const head = fin.winner ? `<div class="cal-note">${ico("check")}<span><b>Final:</b> ${esc(fin.winner_name || teamName(fin.winner))} ${fin.score_winner}-${fin.score_runner_up} ${esc(fin.runner_up_name || teamName(fin.runner_up))}${fin.date ? `, ${esc(_dateOnly(fin.date))}` : ""}. The bracket below is how it played out; the market and model odds on each tie are as they stood before it.</span></div>` : "";
+    box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout bracket <span class="muted">· World Cup 2026, final results</span></h2>` + head + renderBracket(f.bracket, true);
     return;
   }
   const byKind = {}, recs = f.records || {};
@@ -473,7 +533,7 @@ function renderFutures() {
   const toggle = `<span class="fview"><button class="act tiny ${view === "bracket" ? "on" : ""}" data-fview="bracket">Bracket</button><button class="act tiny ${view === "list" ? "on" : ""}" data-fview="list">List</button></span>`;
   const main = view === "list" ? Object.keys(byKind).map(section).join("") : (bracketKeyReads(f.bracket) + renderScenario() + renderBracket(f.bracket));
   box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
-    + `<div class="cal-note">${ico("shield")} <b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</div>`
+    + `<div class="cal-note">${ico("shield")}<span><b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</span></div>`
     + notes + renderLeans(f.leans) + main;
 }
 
@@ -539,22 +599,22 @@ function renderScenario() {
     <table class="scen-tbl"><tbody>${rows || '<tr><td class="muted">no meaningful shifts</td></tr>'}</tbody></table></div></div>`;
 }
 
-function renderBracket(br) {
+function renderBracket(br, archived) {
   if (!br || !br.rounds || !br.rounds.length) return `<div class="muted" style="padding:14px">The bracket fills in as the knockout markets price up.</div>`;
   const teamCell = (team, pct, win, mu) => {
     if (!team) return `<div class="bteam tbd">TBD</div>`;
-    const clickable = mu && !mu.winner && mu.a && mu.b;
+    const clickable = !archived && mu && !mu.winner && mu.a && mu.b;
     const pinned = mu && _isPinned(mu, team);
     const attrs = clickable ? ` data-pin-a="${esc(mu.a)}" data-pin-b="${esc(mu.b)}" data-pin-w="${esc(team)}"` : "";
     return `<div class="bteam ${win ? "bwin" : ""} ${pinned ? "bpin" : ""} ${clickable ? "bclick" : ""}"${attrs}><span class="bname">${esc(teamName(team))}</span><span class="bpct">${pct == null ? "" : pct + "%"}</span></div>`;
   };
   const match = (mu) => {
     const tie = mu.mkt_a == null ? "" : `<div class="btie">mkt ${mu.mkt_a}% · mdl ${mu.mdl_a == null ? "—" : mu.mdl_a + "%"}</div>`;
-    return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a, mu)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b, mu)}${tie}</div>`;
+    return `<div class="bmatch ${mu.winner ? "done" : "pending"}" title="${esc(archived ? (mu.winner ? `${teamName(mu.winner)} went through` : "") : matchupRead(mu))}">${teamCell(mu.a, mu.a_pct, mu.winner === mu.a, mu)}${teamCell(mu.b, mu.b_pct, mu.winner === mu.b, mu)}${tie}</div>`;
   };
   const cols = br.rounds.map((r) => `<div class="bcol"><div class="bcol-h">${esc(r.name)}</div>${r.matchups.map(match).join("")}</div>`).join("");
   const champ = br.champion ? `<div class="bcol bcol-champ"><div class="bcol-h">Champion</div><div class="bmatch champ">${teamCell(br.champion, null, true)}</div></div>` : "";
-  const hint = `<div class="muted bhint">Tap a team in an undecided tie to pin them through and see the bracket shift.</div>`;
+  const hint = archived ? "" : `<div class="muted bhint">Tap a team in an undecided tie to pin them through and see the bracket shift.</div>`;
   return `<div class="bracket-wrap"><div class="bracket">${cols}${champ}</div></div>${hint}`;
 }
 function setPill(id, on) { $("#" + id).classList.toggle("live", !!on); }
@@ -565,9 +625,9 @@ function renderPicks() {
   const p = s.picks || {}, m = s.meta;
   const ab = $("#ai-banner");
   const aiCount = Object.keys(p.ai || {}).length;
+  if (m.archived) { ab.className = ""; ab.innerHTML = ""; $("#today-card").innerHTML = ""; renderArchive(p); return; }
   if (!m.ai_enabled) {
-    ab.className = "banner warn";
-    ab.innerHTML = `${ico("shield")}<span><b>AI analysis is off.</b> Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> for reasoned bet / pass / <b>fade</b> verdicts. Showing heuristic reads + model favorites for now.</span>`;
+    ab.className = ""; ab.innerHTML = "";          // a keys-blank board: nothing to switch on here
   } else if (aiCount) {
     ab.className = "banner ok";
     ab.innerHTML = `${ico("check")}<span>AI analysis ready — <b>${aiCount}</b> match${aiCount > 1 ? "es" : ""} analyzed. Full reasoning is on the <b>Research</b> tab. Cached for today — re-running is free.</span>`;
@@ -618,10 +678,22 @@ function renderTodayCard(p) {
   box.innerHTML = html + `</div></div>`;
 }
 
+// the finished tournament: who won, and where its graded record lives
+function renderArchive(p) {
+  const fin = (p.futures || {}).final;
+  const head = fin
+    ? `<div class="card archive-card"><div class="today-label">${ico("check")} World Cup 2026 is over</div>
+        <div class="arch-final"><b>${esc(fin.winner_name || teamName(fin.winner))}</b> ${fin.score_winner}-${fin.score_runner_up} <b>${esc(fin.runner_up_name || teamName(fin.runner_up))}</b> <span class="muted">· final, ${esc(_dateOnly(fin.date))}</span></div>`
+    : `<div class="card archive-card"><div class="today-label">${ico("check")} World Cup 2026 is over</div>`;
+  $("#bestbets").innerHTML = head + `<div class="muted">This board is the archive. Every game's graded line is on <b>Model Ledger</b>, the AI's picks and their record on <b>Track Record</b>, and the knockout bracket on <b>Futures</b>. The live boards are in the switcher on the left.</div></div>`;
+}
+const _dateOnly = (d) => { const x = new Date((d || "").slice(0, 10) + "T12:00:00"); return isNaN(x) ? (d || "") : x.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); };
+
 function renderBestBets(p) {
   const box = $("#bestbets"), bb = p.best_bets || [];
+  const ai = ((state.snapshot || {}).meta || {}).ai_enabled;
   if (!bb.length) {
-    box.innerHTML = `<div class="empty">${ico("picks")}<div>No bets surfaced yet — tap Analyze for AI picks, or open the <b>Research</b> tab to browse candidates.</div></div>`;
+    box.innerHTML = `<div class="empty">${ico("picks")}<div>${ai ? "No bets surfaced yet. Tap Analyze for AI picks, or open the <b>Research</b> tab to browse candidates." : "No clear favorites on this board in the next few days."}</div></div>`;
     return;
   }
   const days = [...new Set(bb.map((c) => c.days_out).filter((d) => d != null))].sort((a, b) => a - b);
@@ -645,43 +717,65 @@ function renderBestBets(p) {
   const ageS = meta.props_age_seconds;
   const propCards = bb.some((c) => c.archetype !== "favorite_ml" && c.archetype !== "total_corners");
   const staleBanner = (propCards && ageS != null && ageS > 4 * 3600)
-    ? `<div class="cal-note">${ico("shield")} Prop lines last fetched <b>${Math.round(ageS / 3600)}h ago</b> (PrizePicks is rate-limiting; serving the last good board). Check the live line before betting a prop.</div>`
+    ? `<div class="cal-note">${ico("shield")}<span>Prop lines last fetched <b>${Math.round(ageS / 3600)}h ago</b> (PrizePicks is rate-limiting; serving the last good board). Check the live line before betting a prop.</span></div>`
     : "";
 
-  box.innerHTML = `<h2 class="ai-h">${ico("picks")} Best bets <span class="muted">· ranked, with reasoning</span></h2>${staleBanner}${chips}${grid}${fadeHtml}`;
+  // "best bets" only when a real price beats our number; otherwise these are the market's favorites
+  const anyValue = bb.some((c) => c.value || (c.stake_units && c.source !== "model" && c.source !== "market"));
+  const title = anyValue ? `Best bets <span class="muted">· a real price beats our number on these first</span>`
+    : `Favorites <span class="muted">· the market's likeliest winners; no price beats our number right now, so there is no stake</span>`;
+  box.innerHTML = `<h2 class="ai-h">${ico("picks")} ${title}</h2>${staleBanner}${chips}${grid}${fadeHtml}`;
 }
 
+const _VENUE = { kalshi: "Kalshi", polymarket: "Polymarket", draftkings: "DraftKings" };
+// the card's team and game in the board's own names (Kalshi's short labels read "New York Y")
+function _cardNames(c) {
+  const f = ((state.snapshot || {}).picks || {}).favorite_ml || [];
+  const hit = f.find((x) => `${x.team} ML` === c.selection && x.event === c.match);
+  if (!hit || !hit.team_key) return { sel: c.selection, match: c.match };
+  const parts = (c.match || "").split(" vs ");
+  const name = (label) => (label === hit.team ? teamName(hit.team_key) : label === hit.opp ? teamName(hit.opp_key) : label);
+  return { sel: `${teamName(hit.team_key)} ML`, match: parts.length === 2 ? `${name(parts[0])} vs ${name(parts[1])}` : c.match };
+}
 function betCard(c) {
-  const srcLabel = { ai: "AI reasoned", read: "quick read", model: "model" }[c.source] || c.source;
+  const srcLabel = { ai: "AI reasoned", read: "quick read", model: "model", market: "market" }[c.source] || c.source;
   const right = c.confidence ? confMeter(c.confidence) : (c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : "");
   // model-vs-market disagreement chip (favorite ML cards carry both), same threshold as the Ledger
   const gap = (c.market_prob != null && c.model_prob != null)
     ? Math.round(Math.abs(c.market_prob - c.model_prob) * 100) : 0;
   const gapChip = gap >= 8 ? ` <span class="tag gap" title="model and market disagree by ${gap}pp on this favorite">Δ${gap}pp</span>` : "";
   const trap = c.trap ? '<span class="ob demon">trap</span>' : "";
+  const venue = _VENUE[c.best_book] || c.best_book;
   const price = c.best_american != null
-    ? `<div class="bc-price">${ico("best")} best <b>${sgn(c.best_american)}</b> @ ${esc(c.best_book)}${c.ev_pct != null ? ` <span class="ev ${c.ev_pct > 0 ? "pos" : c.ev_pct < 0 ? "neg" : ""}">${c.ev_pct > 0 ? "+" : ""}${c.ev_pct}% vs fair</span>` : ""}</div>`
+    ? `<div class="bc-price">${ico("best")}<span>best <b>${sgn(c.best_american)}</b> at ${esc(venue)}${c.ev_pct != null ? ` <span class="ev ${c.ev_pct > 0 ? "pos" : c.ev_pct < 0 ? "neg" : ""}">${c.ev_pct > 0 ? "+" : ""}${c.ev_pct}% ${c.research_prob != null ? "vs research" : "vs fair"}</span>` : ""}</span></div>`
     : "";
-  const fair = c.market_prob != null
-    ? `<div class="bc-price">${ico("odds")} fair <b>${sgn(fairAm(c.market_prob))}</b> <span class="muted">· value only if your book pays better</span></div>` : "";
+  // one value threshold per card: the research line carries it (with the cushion) when there is research
+  const fair = c.market_prob != null && c.research_prob == null
+    ? `<div class="bc-price">${ico("odds")}<span>fair <b>${sgn(fairAm(c.market_prob))}</b> <span class="muted">· value at <b>${_amer(_valueAt(c.market_prob, c.cushion || 0.02))}</b> or better</span></span></div>` : "";
   const model = c.model_prob != null
     ? `<div class="bc-model">${ico("track")} model <b>${Math.round(c.model_prob * 100)}%</b> to hit ${modelChip(c.model_prob, c.model_value)}</div>` : "";
   const cush = Math.round((c.cushion || 0.02) * 100);
   const rsLine = c.research_prob != null
-    ? `<div class="bc-model" title="the market line plus the research (favorite bias, weather); value needs a ${cush}% edge over it">${ico("track")} research <b>${(c.research_prob * 100).toFixed(1)}%</b> · value at <b>${_amer(c.value_at)}</b> or better</div>` : "";
+    ? `<div class="bc-model" title="the market line plus the research; value needs a ${cush}% edge over it">${ico("track")}<span>research <b>${Math.round(c.research_prob * 100)}%</b> · value at <b>${_amer(c.value_at)}</b> or better</span></div>` : "";
   const dkLine = c.dk_price != null
-    ? `<div class="bc-model">${ico("best")} ${esc(c.dk_book || "DraftKings")} <b>${_amer(c.dk_price)}</b> <span class="ev ${c.dk_ev == null ? "" : c.dk_ev * 100 >= cush ? "pos" : c.dk_ev < 0 ? "neg" : ""}">${_evTxt(c.dk_ev)} vs research</span></div>` : "";
+    ? `<div class="bc-model">${ico("best")}<span>${esc(c.dk_book || "DraftKings")} <b>${_amer(c.dk_price)}</b> <span class="ev ${c.dk_ev == null ? "" : c.dk_ev * 100 >= cush ? "pos" : c.dk_ev < 0 ? "neg" : ""}">${_evTxt(c.dk_ev)} vs research</span></span></div>` : "";
   const rsChips = c.factors ? _rsChips(c.factors) : "";
   const stake = c.stake_units
-    ? `<div class="bc-stake">${ico("odds")} stake <b>${c.stake_units}u</b> <span class="muted">· $${c.stake_dollars}</span></div>` : "";
+    ? `<div class="bc-stake">${ico("odds")}<span>stake <b>${c.stake_units}u</b> <span class="muted">· $${c.stake_dollars}</span></span></div>` : "";
   const mem = c.memory_note ? `<div class="cal-note">${ico("track")} ${esc(c.memory_note)}</div>` : "";
   const research = c.research
     ? `<details class="ai-research"><summary>${ico("chevron", "ico ico-chev")} situational brief</summary><div class="body">${mdLite(c.research)}</div></details>` : "";
+  const names = _cardNames(c);
+  // the research chip already says "heavy favorite"; the chalk tag would say it twice
+  const chalk = c.chalk && !(c.factors || []).some((f) => f.key === "fav_bias")
+    ? ' <span class="tag chalk-tag" title="80% or more: safest legs, smallest payouts">heavy favorite</span>' : "";
+  // a bare "80% sharp fair" repeats the research line below it
+  const why = /sharp fair$/.test(c.reasoning || "") && (c.research_prob != null || c.market_prob != null) ? "" : c.reasoning;
   return `<div class="card bet-card">
     <div class="bc-top"><span class="tag">${esc((c.archetype || "").replace(/_/g, " "))}</span><span class="bc-src ${c.source}">${srcLabel}</span><span class="bc-r">${right}</span></div>
-    <div class="bc-sel">${esc(c.selection)}${gapChip} ${trap}${c.chalk ? ' <span class="tag chalk-tag" title="80% or more: safest legs, smallest payouts">heavy favorite</span>' : ""}</div>
-    <div class="bc-meta">${esc(c.match || "")}${c.days_out != null ? " · " + dateLabel(c.days_out) : ""}</div>
-    <div class="bc-why">${mdLite(c.reasoning || "")}</div>
+    <div class="bc-sel">${esc(names.sel)}${gapChip} ${trap}${chalk}</div>
+    <div class="bc-meta">${esc(names.match || "")}${c.days_out != null ? " · " + dateLabel(c.days_out) : ""}${c.research_prob == null && c.market_prob != null ? ` · market <b>${Math.round(c.market_prob * 100)}%</b>` : ""}</div>
+    ${why ? `<div class="bc-why">${mdLite(why)}</div>` : ""}
     ${fair}${price}${model}${rsLine}${dkLine}${rsChips}${stake}${mem}${research}
   </div>`;
 }
@@ -725,6 +819,11 @@ function _gameSides(g) {
     out.push({ dedup: g.dedup, kind: "total", dir: "over", line: g.total.line, p: g.total.p_over });
     out.push({ dedup: g.dedup, kind: "total", dir: "under", line: g.total.line, p: 1 - g.total.p_over });
   }
+  // each pair's labels add to 100 (rounding both halves on their own can read 49 / 52)
+  for (let i = 0; i + 1 < out.length; i += 2) {
+    if (out[i].p == null || out[i + 1].p == null) continue;
+    out[i].pct = Math.round(out[i].p * 100); out[i + 1].pct = 100 - out[i].pct;
+  }
   return out;
 }
 function _livePrice(leg) {   // the leg's Research % right now, from the live board
@@ -734,14 +833,16 @@ function _livePrice(leg) {   // the leg's Research % right now, from the live bo
   return hit ? hit.p : leg.p;
 }
 function _valueNowHTML(rows) {
-  if (!rows || !rows.length) return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· lines where a real price beats the Research % by its cushion</span></h3><div class="muted" style="padding:6px 2px">Nothing clears the cushion right now. Prices move all week; this list refreshes with the board.</div></div>`;
+  const research = !!(((state.snapshot || {}).picks || {}).model_ledger || {}).research_catalog;
+  const ours = research ? "the Research %" : "the market's fair price";
+  if (!rows || !rows.length) return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· lines where a real price beats ${ours} by its cushion</span></h3><div class="muted" style="padding:6px 2px">Nothing clears the cushion right now. Prices move as games approach; this list refreshes with the board.</div></div>`;
   const row = (r) => {
     const leg = { dedup: r.dedup, kind: r.kind, team: r.team, dir: r.dir, line: r.line, p: r.p };
-    return `<div class="vn-row"><span><b>${esc(_legLabel(leg))}</b> <span class="muted">${esc(teamName(r.team_a))} v ${esc(teamName(r.team_b))} · ${_koLabel(r.kickoff_iso)}</span></span>
+    return `<div class="vn-row"><span><b>${esc(_legLabel(leg))}</b> <span class="muted">${esc(teamName(r.team_a))} v ${esc(teamName(r.team_b))} · ${_koLabel(r.kickoff_iso, r.time_tbd)}</span></span>
       <span class="vn-r"><span>${esc(r.venue)} <b>${_amer(r.price)}</b> <span class="ev pos">${_evTxt(r.ev)}</span></span>
       <button class="act tiny" data-slip-add='${esc(JSON.stringify({ ...leg, price: r.price, venue: r.venue }))}'>add to slip</button></span></div>`;
   };
-  return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· ${rows.length} line${rows.length > 1 ? "s" : ""} where a real price beats the Research % by its cushion (2%, more while a question is open)</span></h3>${rows.map(row).join("")}</div>`;
+  return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· ${rows.length} line${rows.length > 1 ? "s" : ""} where a real price beats ${ours} by its cushion (2%, more while a question is open)</span></h3>${rows.map(row).join("")}</div>`;
 }
 function _parlayHTML(slip, games) {
   const legs = slip.legs.map((l) => ({ ...l, p: _livePrice(l) }));
@@ -771,8 +872,8 @@ function _parlayHTML(slip, games) {
   const shown = (games || []).filter((g) => !filt || (teamName(g.team_a) + " " + teamName(g.team_b)).toLowerCase().includes(filt));
   const inSlip = new Set(slip.legs.map(_legId));
   const picker = `<div class="slip-pick"><input id="slip-filter" placeholder="find a team" value="${esc(state.slipFilter || "")}">
-    ${shown.slice(0, 40).map((g) => `<div class="sp-game"><div class="sp-h"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b> <span class="muted">${_koLabel(g.kickoff_iso)}</span></div>
-      <div class="sp-sides">${_gameSides(g).map((x) => `<button class="sp-side ${inSlip.has(_legId(x)) ? "on" : ""}" data-slip-add='${esc(JSON.stringify(x))}'>${esc(_legLabel(x))} <span class="muted">${x.p ? Math.round(x.p * 100) + "%" : ""}</span></button>`).join("")}</div></div>`).join("")}
+    ${shown.slice(0, 40).map((g) => `<div class="sp-game"><div class="sp-h"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b> <span class="muted">${_koLabel(g.kickoff_iso, g.time_tbd)}</span></div>
+      <div class="sp-sides">${_gameSides(g).map((x) => `<button class="sp-side ${inSlip.has(_legId(x)) ? "on" : ""}" data-slip-add='${esc(JSON.stringify(x))}'>${esc(_legLabel(x))} <span class="muted">${x.pct != null ? x.pct + "%" : x.p ? Math.round(x.p * 100) + "%" : ""}</span></button>`).join("")}</div></div>`).join("")}
     ${shown.length > 40 ? `<div class="muted">${shown.length - 40} more: narrow it with the search</div>` : ""}</div>`;
   return `<div class="pick-section"><h3>${ico("sgp")} Parlay checker <span class="muted">· the true chance it hits, from the Research % of each leg, against your book's payout</span></h3>${legRows}${stats}${warn}${form}
     <details class="rs-notes" ${slip.legs.length ? "" : "open"}><summary>${ico("chevron", "ico ico-chev")} add legs from any game</summary>${picker}</details></div>`;
@@ -892,7 +993,9 @@ function _lottoTicketHTML(t) {
   const exact = n > 0 && t.dk_priced === n;
   const pay = t.dk_payout || t.fair_payout;
   const cut = t.dk_payout && t.fair_payout ? Math.round((1 - t.dk_payout / t.fair_payout) * 100) : null;
-  const miss = t.reached ? "" : `<div class="cal-note">${ico("shield")} <span>No 20 sensible legs pay ${_money0(t.target)} at the book this weekend yet. This is the biggest one there is; more games fill in as the week goes on.</span></div>`;
+  const miss = t.reached ? "" : t.variant === "efficient"
+    ? `<div class="cal-note">${ico("shield")} <span>No 20 DraftKings-priced legs reach ${_money0(t.target)} yet (games get a DraftKings price inside five days of kickoff). This is the biggest one there is; "most likely favorites" can reach it with estimated prices.</span></div>`
+    : `<div class="cal-note">${ico("shield")} <span>No 20 sensible legs pay ${_money0(t.target)} at the book this weekend yet. This is the biggest one there is; more games fill in as the week goes on.</span></div>`;
   const est = exact ? "" : ` <span class="muted">(${n - (t.dk_priced || 0)} leg${n - (t.dk_priced || 0) === 1 ? "" : "s"} without a DraftKings price yet, estimated at this weekend's typical margin for the price)</span>`;
   const book = cut != null ? `<div class="rs-line">Fair odds would pay ${_money0(t.fair_payout)}; the book keeps about <b>${cut}%</b> of this ticket's value${est}.</div>` : "";
   const how = t.variant === "efficient" ? `<div class="cal-note muted"><span>Legs picked to lose the least to the book for each dollar of payout: mid-priced favorites, ${t.dogs ? `${t.dogs} moderate underdog${t.dogs === 1 ? "" : "s"} (35% to 50%)` : "and up to two moderate underdogs when DraftKings prices them near our number"}, and any leg priced above our number first. Heavy favorites cost the most per dollar of payout, so they only top a ticket off.</span></div>` : "";
@@ -903,6 +1006,11 @@ function _lottoTicketHTML(t) {
     <button class="btn lt-load" data-lotto-load="1">Load into Bet Slip</button>
   </div>`;
 }
+// a weekend is keyed by the Tuesday it ends on; people know it by its Saturday to Monday
+const _weekendLabel = (w) => { const end = new Date(w + "T12:00:00Z"); if (isNaN(end)) return "Weekend " + w;
+  const sat = new Date(end); sat.setUTCDate(end.getUTCDate() - 3); const mon = new Date(end); mon.setUTCDate(end.getUTCDate() - 1);
+  const f = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  return `Weekend of ${f(sat)} to ${f(mon)}`; };
 function _lottoTrackedHTML(lotto) {
   const tracked = lotto.tracked || [];
   const weekend = lotto.weekend;
@@ -916,7 +1024,7 @@ function _lottoTrackedHTML(lotto) {
   };
   const byWeekend = {};
   tracked.forEach((t) => (byWeekend[t.weekend] = byWeekend[t.weekend] || []).push(t));
-  const blocks = Object.keys(byWeekend).sort().reverse().map((w) => `<div class="lt-week"><div class="muted lt-wk">Weekend ending ${esc(w)}</div>${byWeekend[w].map(row).join("")}</div>`).join("");
+  const blocks = Object.keys(byWeekend).sort().reverse().map((w) => `<div class="lt-week"><div class="muted lt-wk">${esc(_weekendLabel(w))}</div>${byWeekend[w].map(row).join("")}</div>`).join("");
   return `<div class="pick-section"><h3>${ico("track")} Tracked tickets <span class="muted">· frozen every Saturday morning and graded leg by leg, whether you bet them or not</span></h3>${waiting}${blocks}</div>`;
 }
 function _lottoStudyHTML(st) {
@@ -933,7 +1041,9 @@ function renderLotto() {
   const lotto = (state.snapshot && state.snapshot.picks && state.snapshot.picks.lotto) || null;
   if (!lotto) { box.innerHTML = `<div class="muted" style="padding:14px">The lotto builder fills in once the boards have games this weekend.</div>`; return; }
   const ls = _lottoState();
-  const t = (lotto.tickets || []).find((x) => x.stake === ls.stake && x.target === ls.target && x.variant === ls.variant);
+  const found = (lotto.tickets || []).find((x) => x.stake === ls.stake && x.target === ls.target && x.variant === ls.variant);
+  // tickets name their legs by position in the pool; older snapshots carried the legs themselves
+  const t = found && (found.legs ? found : { ...found, legs: (found.leg_ids || []).map((i) => (lotto.legs || [])[i]).filter(Boolean) });
   state.lottoTicket = t;
   // the boards that fed this weekend's legs (a board with no games, like the World Cup archive, is not one)
   const boards = [...new Set((lotto.legs || []).map((l) => l.sport))].sort();
@@ -942,7 +1052,7 @@ function renderLotto() {
       <label>Pays at least <select id="lotto-target">${[1000, 2500, 5000].map((k) => `<option value="${k}" ${k === ls.target ? "selected" : ""}>${_money0(k)}</option>`).join("")}</select></label>
       <label>Legs <select id="lotto-variant">${_LOTTO_VARIANTS.map(([k, v]) => `<option value="${k}" ${k === ls.variant ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     </div>`;
-  const note = `<div class="cal-note muted"><span><b>The payout sets the odds, and the book takes a cut of every leg.</b> At fair prices $5 to win $1,000 is about 1 in 200 whatever the legs. A sportsbook pays a little under fair on each leg and the cut compounds (US books keep 20 to 30% of parlay money), so the same $1,000 at DraftKings is more like 1 in 250 to 1 in 400. How much depends on the legs: heavy favorites lose the most per dollar of payout, since it takes so many of them, while legs from about 35% to 75% lose the least. That is why "least lost to the book" mixes in up to two moderate underdogs, never long shots. The other levers: a bigger stake (up to $5 here), and a parlay profit boost, which on a ticket this long can cancel most of the book's cut. <b>${(lotto.legs || []).length}</b> sensible legs this weekend across ${boards.map((b) => b.toUpperCase()).join(", ") || "no boards"}.</span></div>`;
+  const note = `<details class="lt-how"><summary>${ico("chevron", "ico ico-chev")} <b>The payout sets the odds, and the book takes a cut of every leg</b></summary><div class="cal-note muted"><span>At fair prices $5 to win $1,000 is about 1 in 200 whatever the legs. A sportsbook pays a little under fair on each leg and the cut compounds (US books keep 20 to 30% of parlay money), so the same $1,000 at DraftKings is more like 1 in 250 to 1 in 400. How much depends on the legs: heavy favorites lose the most per dollar of payout, since it takes so many of them, while legs from about 35% to 75% lose the least. That is why "least lost to the book" mixes in up to two moderate underdogs, never long shots. The other levers: a bigger stake (up to $5 here), and a parlay profit boost, which on a ticket this long can cancel most of the book's cut. <b>${(lotto.legs || []).length}</b> sensible legs this weekend across ${boards.map((b) => b.toUpperCase()).join(", ") || "no boards"}.</span></div></details>`;
   box.innerHTML = controls + note + (t ? _lottoTicketHTML(t) : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`)
     + _lottoTrackedHTML(lotto) + _lottoStudyHTML(lotto.study);
 }
@@ -985,9 +1095,10 @@ function _topWho(r) {
   return `<div class="tb-row"><span class="tb-who"><span class="tb-plat ${r.platform === "Kalshi" ? "k" : "p"}">${r.platform === "Kalshi" ? "K" : "PM"}</span> <b title="${esc(r.name)}">${esc(_handle(r.name))}</b> <span class="muted">#${r.rank} ${esc(r.window)} · ${_money(r.pnl)} profit</span>${tags}</span><span class="tb-amt">${size}${r.price != null ? ` <span class="muted">@ ${_cents(r.price)}</span>` : ""}</span></div>`;
 }
 function _topGame(g) {
-  const mk = g.market ? `<div class="rs-line muted">market ${esc(teamName(g.team_a))} ${Math.round(g.market[0] * 100)}% · ${esc(teamName(g.team_b))} ${Math.round(g.market[2] * 100)}%</div>` : "";
+  const sp = g.market ? _split(g.market) : null;
+  const mk = sp ? `<div class="rs-line muted">market ${esc(teamName(g.team_a))} ${sp[0]}% · ${esc(teamName(g.team_b))} ${sp[2]}%</div>` : "";
   const c = g.consensus;
-  const cons = c ? `<div class="rs-line">top-bettor money on the moneyline: <b>${esc(teamName(c.team))}</b> ${Math.round(c.share * 100)}% of ${_money(c.total)} <span class="muted">(${c.traders} trader${c.traders > 1 ? "s" : ""})</span></div>` : "";
+  const cons = c ? `<div class="rs-line" title="directional traders only: market makers and wallets on both sides are left out">top-bettor money on the moneyline: <b>${esc(teamName(c.team))}</b> ${Math.round(c.share * 100)}% of ${_money(c.total)} <span class="muted">(${c.traders} directional trader${c.traders > 1 ? "s" : ""}; market makers left out)</span></div>` : "";
   const lines = g.lines.map((l) => `<details class="tb-line"><summary><span class="tb-side">${esc(_topLine(l))}</span><span class="tb-sum">${l.traders} trader${l.traders > 1 ? "s" : ""} · <b>${_money(l.stake)}</b></span></summary>${l.rows.map(_topWho).join("")}</details>`).join("");
   return `<div class="fcard">
     <div class="fcard-h"><span class="fcard-m"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b></span><span class="fcard-k muted">${_koLabel(g.kickoff_iso)}</span></div>
@@ -999,16 +1110,16 @@ function renderTopBettors() {
   if (!tt) { box.innerHTML = `<div class="muted" style="padding:14px">Top bettors are tracked on the NFL, college football, NHL and MLB boards.</div>`; return; }
   const m = tt.meta || {};
   const upd = m.updated ? new Date(m.updated * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "-";
-  const head = `<div class="cal-note muted">${ico("smart")} <span>Tracking the <b>${m.poly_traders || 0}</b> Polymarket wallets in the top 100 sports traders by profit (this month and all-time) and the <b>${m.kalshi_traders || 0}</b> Kalshi traders in its top 100 (all-time and last 30 days), of whom <b>${m.kalshi_visible || 0}</b> share their holdings. Positions as of ${upd}, refreshed every 20 minutes. Big traders tend to build positions close to kickoff, so the board fills in during game week.</span></div>`;
+  const head = `<div class="cal-note muted">${ico("smart")} <span>Tracking the <b>${m.poly_traders || 0}</b> Polymarket wallets in the top 100 sports traders by profit (this month and all-time) and the <b>${m.kalshi_traders || 0}</b> Kalshi traders in its top 100 (all-time and last 30 days), of whom <b>${m.kalshi_visible || 0}</b> share their holdings. Positions as of ${upd}, refreshed every 20 minutes. Big traders tend to build positions close to game time, so the board fills in as games approach.</span></div>`;
   const games = tt.games || [];
   const quiet = Math.max(0, (m.games_listed || 0) - games.length);
   const grid = games.length
     ? `<div class="pick-section"><h3>${ico("smart")} By game <span class="muted">· ${games.length} game${games.length > 1 ? "s" : ""} with top-bettor positions${quiet ? `, ${quiet} more with none yet` : ""}; tap a line to see who holds it</span></h3><div class="fgrid">${games.map(_topGame).join("")}</div></div>`
-    : `<div class="muted" style="padding:14px">No top-bettor positions on this board's games yet. They usually build during game week, close to kickoff.</div>`;
+    : `<div class="muted" style="padding:14px">No top-bettor positions on this board's games yet. They usually build close to game time.</div>`;
   const lead = (tt.leaders || []).length ? `<div class="pick-section"><h3>${ico("track")} Who is active on this board <span class="muted">· leaderboard traders with money on these games</span></h3>
-    <table class="flat"><thead><tr><th>Trader</th><th>Rank</th><th class="num">Profit</th><th class="num">Lines</th><th class="num">On these games</th></tr></thead><tbody>${tt.leaders.map((r) => `<tr>
+    <div class="tbl-scroll"><table class="flat"><thead><tr><th>Trader</th><th>Rank</th><th class="num">Profit</th><th class="num">Lines</th><th class="num">On these games</th></tr></thead><tbody>${tt.leaders.map((r) => `<tr>
       <td><span class="tb-plat ${r.platform === "Kalshi" ? "k" : "p"}">${r.platform === "Kalshi" ? "K" : "PM"}</span> <b title="${esc(r.name)}">${esc(_handle(r.name))}</b>${r.mm ? ` <span class="rchip cau">market maker?</span>` : ""}</td>
-      <td>#${r.rank} <span class="muted">${esc(r.window)}</span></td><td class="num">${_money(r.pnl)}</td><td class="num">${r.lines}</td><td class="num">${_money(r.stake)}</td></tr>`).join("")}</tbody></table></div>` : "";
+      <td>#${r.rank} <span class="muted">${esc(r.window)}</span></td><td class="num">${_money(r.pnl)}</td><td class="num">${r.lines}</td><td class="num">${_money(r.stake)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
   box.innerHTML = head + grid + lead;
 }
 
@@ -1022,26 +1133,31 @@ function renderResearch() {
 
   let intro = "";
   if (!m.ai_enabled) {
-    intro = `<div class="banner warn">${ico("shield")}<span><b>AI analysis is off.</b> Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> for web-grounded bet / pass / <b>fade</b> verdicts. The candidate browse below still works (deterministic reads).</span></div>`;
+    intro = "";
   } else if (!aiCount) {
     intro = `<div class="banner warn">${ico("analyze")}<span><b>No analysis yet.</b> Tap <b>Analyze</b> (top-right) for reasoned verdicts on today's favorites — a few cents, cached for the day.</span></div>`;
   }
   const cards = aiCount ? `<h2 class="ai-h">${ico("analyze")} AI slate analysis</h2>` + aiCardsHTML(ai) : "";
-  $("#research-body").innerHTML = intro + cards + cornersHTML(p.corners) + kalshiPropsHTML(p.kalshi_props) + browseHTML(p);
+  const ml = p.model_ledger || {};
+  const study = _researchStudyHTML(ml.research_study, ml.research_catalog);
+  $("#research-body").innerHTML = intro + cards + study + cornersHTML(p.corners) + kalshiPropsHTML(p.kalshi_props) + browseHTML(p);
 }
 
 // de-vigged Kalshi player props (free): the sharp fair probability on each line, research-only
 function kalshiPropsHTML(rows) {
   if (!rows || !rows.length) return "";
+  const shown = rows.slice(0, 40);
   const tr = (r) => `<tr>
-    <td><b>${esc(r.player)}</b><div class="muted tiny">${esc(r.event || "")}</div></td>
+    <td><b>${esc(r.player)}</b></td>
     <td>${esc(r.stat)} <b>${r.line != null ? Math.ceil(r.line) : ""}+</b></td>
     <td class="num">${Math.round(r.over_fair * 100)}%</td>
     <td class="num">${sgn(fairAm(r.over_fair))} / ${sgn(fairAm(1 - r.over_fair))}</td>
     <td class="muted">${r.days_out != null ? dateLabel(r.days_out) : ""}</td></tr>`;
-  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· de-vigged Kalshi fair probability per line (free, no key); hold your book's price on the same line against the fair odds</span></h3>
-    <table><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th class="num">Fair odds (over / under)</th><th>When</th></tr></thead>
-    <tbody>${rows.slice(0, 40).map(tr).join("")}</tbody></table></div>`;
+  const total = ((state.snapshot || {}).picks || {}).kalshi_props_total || rows.length;
+  const more = total > shown.length ? `the ${shown.length} soonest of ${total} lines; ` : "";
+  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· ${more}Kalshi's fair price with the vig removed; hold your book's price on the same line against it</span></h3>
+    <div class="tbl-scroll"><table class="flat"><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th class="num">Fair odds (over / under)</th><th>When</th></tr></thead>
+    <tbody>${shown.map(tr).join("")}</tbody></table></div></div>`;
 }
 
 
@@ -1068,7 +1184,7 @@ function cornersHTML(rows) {
   }).join("");
   return `<div class="pick-section corners-section"><h3>${ico("value")} Corners <span class="muted">· model total vs book line · a dominance market</span></h3>
     <table><thead><tr><th>Match</th><th class="num">Projection</th><th class="num">Line</th><th>Lean</th><th class="num">EV</th><th>Conf</th></tr></thead><tbody>${body}</tbody></table>
-    <div class="cal-note">${ico("shield")} Projections use each team's corners-for/against shrunk to a league prior, adjusted for the opponent + projected possession. <b>prior</b> = no corner history yet (read, not bet). Tap <b>Odds</b> (left rail) to pull book lines for today/tomorrow (~1 credit/game); +EV corners with measured history then surface in <b>Best Bets</b> and log on <b>Analyze</b> like any other pick.</div></div>`;
+    <div class="cal-note">${ico("shield")}<span>Projections use each team's corners-for/against shrunk to a league prior, adjusted for the opponent + projected possession. <b>prior</b> = no corner history yet (read, not bet). Tap <b>Odds</b> (left rail) to pull book lines for today/tomorrow (~1 credit/game); +EV corners with measured history then surface in <b>Best Bets</b> and log on <b>Analyze</b> like any other pick.</span></div></div>`;
 }
 
 function aiCardsHTML(ai) {
@@ -1114,13 +1230,16 @@ function smartLine(v) {
 }
 
 function browseHTML(p) {
+  const meta = (state.snapshot || {}).meta || {};
+  const soccer = meta.sport === "wc26";
+  const hasModel = !!meta.model_loaded;
   const favRows = (p.favorite_ml || []).map((f) => `<tr class="${f.chalk ? "fav-chalk" : ""}">
-    <td><b>${esc(f.team)}</b> ${f.chalk ? '<span class="tag chalk-tag">chalk</span>' : ""}</td>
-    <td class="num">${(f.fair_prob * 100).toFixed(0)}% <span class="muted">fair</span></td>
-    <td class="num">${f.model_prob != null ? (f.model_prob * 100).toFixed(0) + "% model" : "—"}</td>
-    <td class="muted">${f.days_out != null ? `<span class="tag">${dateLabel(f.days_out)}</span> ` : ""}${esc(f.event)}</td></tr>`).join("");
+    <td><b>${esc(f.team_key ? teamName(f.team_key) : f.team)}</b> ${f.chalk ? '<span class="tag chalk-tag">chalk</span>' : ""}</td>
+    <td class="num">${Math.round(f.fair_prob * 100)}% <span class="muted">fair</span></td>
+    ${hasModel ? `<td class="num">${f.model_prob != null ? Math.round(f.model_prob * 100) + "% model" : "—"}</td>` : ""}
+    <td class="muted">${f.days_out != null ? `<span class="tag">${dateLabel(f.days_out)}</span> ` : ""}${esc(f.opp_key ? `vs ${teamName(f.opp_key)}` : f.event)}</td></tr>`).join("");
   const favTbl = (p.favorite_ml || []).length
-    ? `<label class="chalk-toggle"><input type="checkbox" id="hide-chalk" ${document.body.classList.contains("hide-chalk") ? "checked" : ""}> Hide obvious chalk (≥80%)</label><table><tbody>${favRows}</tbody></table>`
+    ? `<label class="chalk-toggle"><input type="checkbox" id="hide-chalk" ${document.body.classList.contains("hide-chalk") ? "checked" : ""}> Hide obvious chalk (80% or more)</label><div class="tbl-scroll"><table class="flat"><tbody>${favRows}</tbody></table></div>`
     : `<div class="empty">no clear favorites in the next few days</div>`;
 
   const ttLine = (p.team_total_over && p.team_total_over[0]) ? p.team_total_over[0].line : 1.5;
@@ -1130,12 +1249,15 @@ function browseHTML(p) {
     <td class="num">${t.exp_goals != null ? t.exp_goals + " xG" : ""}</td>
     <td class="muted">${esc(t.event)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">none</div>`;
 
-  return `<details class="browse" open><summary>${ico("markets")} Browse all candidates</summary><div class="browse-body">`
-    + pickSection("Favorite moneylines", "clear favorites (≥55%)", favTbl)
-    + pickSection("Team total — over " + ttLine, "model expected goals", ttTbl)
-    + pickSection("Anytime goalscorer", "favorites' scorers first", propTable(p.anytime_goalscorer))
-    + pickSection("Shots / shots on target — over", "by popularity", propTable(p.shots_sot))
-    + pickSection("Popular props", "the Popular tab", propTable(p.popular_props))
+  // the soccer sections only exist on the World Cup board; an empty section is left out, not boxed
+  const extra = soccer ? [
+    ["Team total, over " + ttLine, "model expected goals", (p.team_total_over || []).length ? ttTbl : ""],
+    ["Anytime goalscorer", "favorites' scorers first", (p.anytime_goalscorer || []).length ? propTable(p.anytime_goalscorer) : ""],
+    ["Shots / shots on target, over", "by popularity", (p.shots_sot || []).length ? propTable(p.shots_sot) : ""],
+    ["Popular props", "PrizePicks' most-played lines", (p.popular_props || []).length ? propTable(p.popular_props) : ""],
+  ].filter((x) => x[2]).map((x) => pickSection(...x)).join("") : "";
+  return `<details class="browse" open><summary>${ico("markets")} Favorites</summary><div class="browse-body">`
+    + pickSection("Favorite moneylines", "clear favorites (55% or better)", favTbl) + extra
     + `</div></details>`;
 }
 
@@ -1217,7 +1339,7 @@ function bankrollHero(s) {
   const deltaTxt = `${sign}$${fmtMoney(Math.abs(delta))} · ${sign}${Math.abs(pctv).toFixed(1)}%`;
   return `<div class="bankroll-hero">
     <div class="bh-main">
-      <div class="bh-label">Bankroll <span class="muted">· ${fmtMoney(s.unit_dollars || 10)}/unit</span></div>
+      <div class="bh-label">Bankroll <span class="muted">· $${fmtMoney(s.unit_dollars || 10)}/unit</span></div>
       <div class="bh-val">$${fmtMoney(bank)}</div>
       <div class="bh-delta ${cls}">${delta === 0 ? "even" : deltaTxt} <span class="muted">from $${fmtMoney(start)}</span></div>
     </div>
@@ -1235,8 +1357,9 @@ function renderPaper() {
     stat("Avg CLV", o.avg_clv == null ? "—" : sgn(o.avg_clv) + "%", clvCls) +
     stat("Beat close", o.beat_close_pct == null ? "—" : o.beat_close_pct + "%", o.beat_close_pct >= 50 ? "pos" : "") +
     stat("Record", o.settled ? `${o.wins}-${o.settled - o.wins}` : "—") +
-    stat("Units P/L", o.units_pl ? sgn(o.units_pl) + "u" : "—", plCls) +
-    stat("ROI", o.roi_pct == null ? "—" : o.roi_pct + "%", plCls);
+    // P/L and ROI count only the priced picks (moneylines, parlays); props carry no price
+    stat(`Units P/L${o.priced != null ? ` <span class="muted">· ${o.priced} priced</span>` : ""}`, o.units_pl ? sgn(o.units_pl) + "u" : "—", plCls) +
+    stat(`ROI${o.priced != null ? ` <span class="muted">· ${o.priced} priced</span>` : ""}`, o.roi_pct == null ? "—" : o.roi_pct + "%", plCls);
   if (d.summary.real_count) {
     const r = d.summary.real;
     summary += stat("Real $ P/L", r.units_pl ? sgn(r.units_pl) + "u" : "—", r.units_pl > 0 ? "pos" : r.units_pl < 0 ? "neg" : "");
@@ -1258,7 +1381,7 @@ function renderPaper() {
           <td class="num">${r.score == null ? "—" : (r.metric === "clv" ? sgn(r.score) + "% CLV" : sgn(r.score) + "pp")}</td></tr>`).join("")}</tbody></table></div>`;
     } else {
       const best = cal.reduce((mx, r) => Math.max(mx, r.n_eff || 0), 0);
-      calBox.innerHTML = `<div class="cal-note">${ico("track")} Confidence calibration unlocks once a context bucket reaches 20 settled picks — favorite-ML picks now auto-settle from results, so this fills on its own. Best bucket so far: <b>${Math.round(best)}/20</b>.</div>`;
+      calBox.innerHTML = `<div class="cal-note">${ico("track")}<span>Confidence calibration unlocks once a context bucket reaches 20 settled picks. Best bucket so far: <b>${Math.round(best)}/20</b>.</span></div>`;
     }
   }
 
@@ -1277,8 +1400,9 @@ function renderPaper() {
       <td class="num">${a.beat_close_pct == null ? "—" : a.beat_close_pct + "%"}</td>
       <td class="num">${a.roi_pct == null ? "—" : a.roi_pct + "%"}</td></tr>`; }).join("")}</tbody></table></div>` : "";
   // model calibration: the model's projected P(hit) vs actual outcomes (fills as new picks settle)
+  // a calibration row on two or three picks is noise, not a finding: only buckets of 20 or more show
   const mc = d.summary.model_calibration || {};
-  const mck = Object.keys(mc);
+  const mck = Object.keys(mc).filter((k) => (mc[k].n || 0) >= 20);
   const calTbl = mck.length ? `<div class="pick-section"><h3>Model calibration <span class="muted">· projected vs actual once picks settle · Brier lower = sharper (0.25 = coin flip)</span></h3>
     <table><thead><tr><th>Archetype</th><th class="num">n</th><th class="num">Model says</th><th class="num">Actual</th><th class="num">Gap</th><th class="num">Brier</th></tr></thead><tbody>${
     mck.map((k) => { const m = mc[k]; const over = m.gap_pp > 5, under = m.gap_pp < -5; return `<tr>
@@ -1288,13 +1412,14 @@ function renderPaper() {
       <td class="num">${Math.round(m.hit_rate * 100)}%</td>
       <td class="num ${over ? "neg" : ""}">${sgn(m.gap_pp)}pp${over ? " over" : under ? " under" : ""}</td>
       <td class="num">${m.brier}</td></tr>`; }).join("")}</tbody></table>
-    <div class="cal-note">${ico("track")} A large positive gap (model says &gt; actual) means the model over-projects that archetype. Populates from picks logged after this shipped.</div></div>` : "";
+    <div class="cal-note">${ico("track")}<span>A large positive gap (model says more than actual) means the model over-projects that archetype.</span></div></div>` : "";
   $("#track-arch").innerHTML = archHtml + calTbl;
 
   // pick ledger — split Open / Settled, ordered by kickoff
   const body = $("#track-body");
   if (!d.picks.length) {
-    body.innerHTML = `<div class="empty">${ico("track")}<div>No picks logged yet. Hit <b>Analyze</b> — every recommended bet auto-logs here and favorite MLs settle themselves.</div></div>`;
+    const aiOn = ((state.snapshot || {}).meta || {}).ai_enabled;
+    body.innerHTML = `<div class="empty">${ico("track")}<div>${aiOn ? "No picks logged yet. Tap <b>Analyze</b>: every recommended bet logs here and favorite moneylines settle themselves." : "No AI picks on this board. Its graded record is the <b>Model Ledger</b>, your own bets are under <b>Bet Slip</b>, and the weekend tickets under <b>Lotto</b>."}</div></div>`;
     return;
   }
   const dt = new Date();
@@ -1314,7 +1439,9 @@ function renderPaper() {
     awaiting: d.picks.filter((p) => p.status === "pending" && over(p)).sort((a, b) => kick(b).localeCompare(kick(a))),   // finished, ungraded, recent first
     settled: d.picks.filter((p) => p.status !== "pending").sort((a, b) => kick(b).localeCompare(kick(a))),              // graded, recent first
   };
-  const tab = groups[state.trackTab] ? state.trackTab : "open";
+  // open on the first list that has picks (a finished event has none open), unless one was chosen
+  const tab = state.trackChosen && groups[state.trackTab] ? state.trackTab
+    : ["open", "awaiting", "settled"].find((k) => groups[k].length) || "open";
   const chip = (k, label) => `<button class="dchip ${tab === k ? "on" : ""}" data-track="${k}">${label} ${groups[k].length}</button>`;
   const chips = `<div class="day-filter">${chip("open", "Open")}${chip("awaiting", "Awaiting")}${chip("settled", "Settled")}</div>`;
   const hint = tab === "awaiting"
@@ -1535,7 +1662,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   const c = e.target.closest("[data-track]");
   if (!c) return;
-  state.trackTab = c.dataset.track;
+  state.trackTab = c.dataset.track; state.trackChosen = true;
   if (state.paper) renderPaper();
 });
 

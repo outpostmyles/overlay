@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Overlay · WC2026</title>
+  <title>Overlay</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='5' width='15' height='15' rx='4' fill='none' stroke='%238b7bff' stroke-width='2.4'/%3E%3Crect x='12' y='12' width='15' height='15' rx='4' fill='%238b7bff'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20261014" />
+  <link rel="stylesheet" href="styles.css?v=20261015" />
 </head>
 <body>
   <!-- icon sprite -->
@@ -20,6 +20,7 @@
     <symbol id="i-smart" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10 h18"/><circle cx="17" cy="14" r="1.3" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-markets" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
     <symbol id="i-track" viewBox="0 0 24 24"><polyline points="3 14 8 9 12 12 16 6 21 9"/><line x1="3" y1="20" x2="21" y2="20"/></symbol>
+    <symbol id="i-ledger" viewBox="0 0 24 24"><path d="M6 3.5h10.5a2.5 2.5 0 0 1 2.5 2.5v14.5H8.5A2.5 2.5 0 0 1 6 18z"/><line x1="10" y1="8.5" x2="15.5" y2="8.5"/><line x1="10" y1="12.5" x2="15.5" y2="12.5"/><line x1="10" y1="16.5" x2="13.5" y2="16.5"/></symbol>
     <symbol id="i-bets" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4 h6 v2 h-6 z" fill="currentColor" stroke="none"/><polyline points="9 13 11 15 15 10"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="21 4 21 9 16 9"/><polyline points="3 20 3 15 8 15"/><path d="M19.4 9A8 8 0 0 0 6 6.3L3 9"/><path d="M4.6 15A8 8 0 0 0 18 17.7L21 15"/></symbol>
     <symbol id="i-odds" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6 v6 c0 1.7 3.1 3 7 3 s7-1.3 7-3 V6"/><path d="M5 12 v6 c0 1.7 3.1 3 7 3 s7-1.3 7-3 v-6"/></symbol>
@@ -46,7 +47,7 @@
       </svg>
       <span class="logo">Overlay</span>
       <span class="brand-div"></span>
-      <span class="subtitle" id="sport-badge">World Cup 2026</span>
+      <span class="subtitle" id="sport-badge"></span>
     </div>
     <div class="status">
       <span class="pill" id="pill-pm">Polymarket</span>
@@ -55,7 +56,7 @@
       <span class="pill" id="pill-model">Model</span>
       <span class="meta" id="meta-updated">—</span>
       <button class="btn" id="refresh"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button>
-      <button class="btn ai-btn" id="refresh-ai"><svg class="ico"><use href="#i-analyze"/></svg>Analyze</button>
+      <button class="btn ai-btn" id="refresh-ai" style="display:none"><svg class="ico"><use href="#i-analyze"/></svg>Analyze</button>
     </div>
   </header>
 
@@ -63,15 +64,15 @@
     <nav class="rail">
       <div class="boards" id="boards" hidden></div>
       <button class="tab active" data-tab="picks"><svg class="ico"><use href="#i-picks"/></svg><span class="label">Best Bets</span></button>
-      <button class="tab" data-tab="ledger"><svg class="ico"><use href="#i-track"/></svg><span class="label">Model Ledger</span></button>
+      <button class="tab" data-tab="ledger"><svg class="ico"><use href="#i-ledger"/></svg><span class="label">Model Ledger</span></button>
       <button class="tab" data-tab="slip"><svg class="ico"><use href="#i-bets"/></svg><span class="label">Bet Slip</span></button>
       <button class="tab" data-tab="lotto"><svg class="ico"><use href="#i-sgp"/></svg><span class="label">Lotto</span></button>
       <button class="tab" data-tab="top"><svg class="ico"><use href="#i-smart"/></svg><span class="label">Top Bettors</span></button>
       <button class="tab" data-tab="research"><svg class="ico"><use href="#i-analyze"/></svg><span class="label">Research</span></button>
       <button class="tab" data-tab="track"><svg class="ico"><use href="#i-track"/></svg><span class="label">Track Record</span></button>
-      <button class="tab" data-tab="futures"><svg class="ico"><use href="#i-markets"/></svg><span class="label">Futures</span></button>
+      <button class="tab" data-tab="futures" style="display:none"><svg class="ico"><use href="#i-markets"/></svg><span class="label">Futures</span></button>
 
-      <div class="rail-foot">
+      <div class="rail-foot" style="display:none">
         <span class="credits" id="odds-credits">no key</span>
         <div class="meter" id="odds-meter"><i id="odds-meter-fill" style="width:0"></i></div>
         <button class="btn odds-btn" id="refresh-odds" title="Fetch sportsbook lines — moneylines (slate) + total corners (today/tomorrow). A few of your 500 monthly credits."><svg class="ico"><use href="#i-odds"/></svg><span class="label">Odds</span></button>
@@ -86,32 +87,32 @@
       </section>
 
       <section id="tab-ledger" class="panel">
-        <p class="hint">A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (before lineups leak): the model's call on the match result plus total goals, each team's goals, both-teams-to-score, and total corners, with the de-vigged market line on the 1X2 frozen at the same instant as the benchmark. After the game every line is graded against the result, right or wrong. The 1X2 also scores the <b>model</b> against the market on calibration (does it add anything over the sharp line). Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw); corners grade only with an API-Football key. Small sample, exploratory: the model-vs-market aggregate stays hidden until enough games settle, and none of this should be used to retune the model.</p>
+        <div class="hint">Every game's line, frozen about 75 minutes before kickoff and graded after the final: the record of how good the line was. <details class="how"><summary>How this works</summary><div>A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (before lineups leak): the model's call on the match result plus total goals, each team's goals, both-teams-to-score, and total corners, with the de-vigged market line on the 1X2 frozen at the same instant as the benchmark. After the game every line is graded against the result, right or wrong. The 1X2 also scores the <b>model</b> against the market on calibration (does it add anything over the sharp line). Forward-only and never backfilled (the model has already seen the played games, so a backfill would be hindsight); penalties are out of scope (a level knockout grades as a draw); corners grade only with an API-Football key. Small sample, exploratory: the model-vs-market aggregate stays hidden until enough games settle, and none of this should be used to retune the model.</div></details></div>
         <div id="ledger-body"></div>
       </section>
 
       <section id="tab-slip" class="panel">
-        <p class="hint">Where the board turns into bets. <b>Value now</b> lists every line where a real price (DraftKings, or Kalshi after its fee) beats the Research % by enough to matter. The <b>parlay checker</b> shows the true chance a parlay hits and whether your book's payout is worth it. <b>My bets</b> logs what you actually bet and grades it against the closing line, the best long-run measure of skill.</p>
+        <div class="hint">Where the board turns into bets: lines a real price undervalues, a parlay checker, and the bets you log. <details class="how"><summary>How this works</summary><div>Where the board turns into bets. <b>Value now</b> lists every line where a real price (DraftKings, or Kalshi after its fee) beats the Research % by enough to matter. The <b>parlay checker</b> shows the true chance a parlay hits and whether your book's payout is worth it. <b>My bets</b> logs what you actually bet and grades it against the closing line, the best long-run measure of skill.</div></details></div>
         <div id="slip-body"></div>
       </section>
 
       <section id="tab-lotto" class="panel">
-        <p class="hint">Fun-money weekend parlays: <b>$5 or less to win $1,000 or more at the book</b>, built only from legs that make sense on their own: favorites at 60% or better, moderate underdogs (35% to 50%) with a real price on them, one leg per game, nothing with a questionable starting QB (a college game with no injury report is labeled). The legs the research favors are marked: a price that beats our number, NFL totals the wind has moved, the side the top bettors are on. Every running board feeds it, so a ticket can mix the NFL, college, the NHL and MLB. Every weekend's tickets are <b>tracked and graded whether you bet them or not</b>, so the record shows which legs, and which way of building a ticket, hold up.</p>
+        <div class="hint">Fun-money weekend parlays: <b>$5 or less to win $1,000 or more at the book</b>, from legs that make sense on their own, and <b>tracked every weekend whether you bet them or not</b>. <details class="how"><summary>How this works</summary><div>Fun-money weekend parlays: <b>$5 or less to win $1,000 or more at the book</b>, built only from legs that make sense on their own: favorites at 60% or better, moderate underdogs (35% to 50%) with a real price on them, one leg per game, nothing with a questionable starting QB (a college game with no injury report is labeled). The legs the research favors are marked: a price that beats our number, NFL totals the wind has moved, the side the top bettors are on. Every running board feeds it, so a ticket can mix the NFL, college, the NHL and MLB. Every weekend's tickets are <b>tracked and graded whether you bet them or not</b>, so the record shows which legs, and which way of building a ticket, hold up.</div></details></div>
         <div id="lotto-body"></div>
       </section>
 
       <section id="tab-top" class="panel">
-        <p class="hint">What the most profitable sports traders on <b>Polymarket</b> and <b>Kalshi</b> are holding on the games on this board, line by line: who holds it, how much, and at what price. Polymarket is on-chain, so every wallet is public; Kalshi profiles are private unless the trader opts in, so only some of its leaders appear. A position is a bet someone holds right now, not a tip: some are hedges, and a wallet holding both sides of one market (a market maker) is netted and marked. Whether following them beats the price is graded in the Research study on the football boards.</p>
+        <div class="hint">What the most profitable sports traders on <b>Polymarket</b> and <b>Kalshi</b> hold on this board's games, line by line. <details class="how"><summary>How this works</summary><div>What the most profitable sports traders on <b>Polymarket</b> and <b>Kalshi</b> are holding on the games on this board, line by line: who holds it, how much, and at what price. Polymarket is on-chain, so every wallet is public; Kalshi profiles are private unless the trader opts in, so only some of its leaders appear. A position is a bet someone holds right now, not a tip: some are hedges, and a wallet holding both sides of one market (a market maker) is netted and marked. Whether following them beats the price is graded in the Research study.</div></details></div>
         <div id="top-body"></div>
       </section>
 
       <section id="tab-research" class="panel">
-        <p class="hint">The reasoning behind the picks — per-match AI verdicts grounded in live web research (form, injuries, expected lineups, motivation), with smart-money whale backing as a tiebreaker. Tap <b>Analyze</b> (top right) to generate. Below, browse every candidate and tap <b>Read</b> for an on-demand AI take on any prop.</p>
+        <div class="hint">The reasoning behind the picks: per-match AI verdicts and the candidates behind them. <details class="how"><summary>How this works</summary><div>The reasoning behind the picks: per-match AI verdicts grounded in live web research (form, injuries, expected lineups, motivation), with smart-money whale backing as a tiebreaker. Tap <b>Analyze</b> (top right) to generate. Below, browse every candidate and tap <b>Read</b> for an on-demand AI take on any prop.</div></details></div>
         <div id="research-body"></div>
       </section>
 
       <section id="tab-track" class="panel">
-        <p class="hint">Auto-logged record of every AI pick. <b>CLV</b> (closing line value) is computed from our own feeds — beating the close is the strongest predictor of long-run profit, and it builds before games settle. Favorite-ML picks <b>auto-settle from results</b>; grade props with the status dropdown, and tick <b>real money</b> on any pick you actually placed.</p>
+        <div class="hint">The record of every pick the AI logged, scored by closing line value. <details class="how"><summary>How this works</summary><div>Auto-logged record of every AI pick. <b>CLV</b> (closing line value) is computed from our own feeds: beating the close is the strongest predictor of long-run profit, and it builds before games settle. Favorite-ML picks <b>auto-settle from results</b>; grade props with the status dropdown, and tick <b>real money</b> on any pick you actually placed.</div></details></div>
         <div id="track-summary" class="summary"></div>
         <div id="track-cal"></div>
         <div id="track-arch"></div>
@@ -119,12 +120,12 @@
       </section>
 
       <section id="tab-futures" class="panel">
-        <p class="hint">The de-vigged Polymarket futures (vig-free probabilities to reach each knockout round and to win the cup) are the sharp, primary read. Alongside each, an independent Monte Carlo simulation of the bracket (the match model played out thousands of times, conditioned on every group result so far) rides as a <b>second opinion</b>. The model is opponent-adjusted and graded on a leak-free holdout, but it reads tournament odds off long-run goal records, so it can diverge from the market in either direction; read large gaps as disagreement, not as edges to bet. The 12-group field is rebuilt from finished games, so it survives the group-winner markets closing.</p>
+        <div class="hint">The knockout bracket with the market's and the model's odds on each tie. <details class="how"><summary>How this works</summary><div>The de-vigged Polymarket futures (vig-free probabilities to reach each knockout round and to win the cup) are the sharp, primary read. Alongside each, an independent Monte Carlo simulation of the bracket (the match model played out thousands of times, conditioned on every group result so far) rides as a <b>second opinion</b>. The model is opponent-adjusted and graded on a leak-free holdout, but it reads tournament odds off long-run goal records, so it can diverge from the market in either direction; read large gaps as disagreement, not as edges to bet. The 12-group field is rebuilt from finished games, so it survives the group-winner markets closing.</div></details></div>
         <div id="futures-body"></div>
       </section>
     </main>
   </div>
 
-  <script src="app.js?v=20261014"></script>
+  <script src="app.js?v=20261015"></script>
 </body>
 </html>
