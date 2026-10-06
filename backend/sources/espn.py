@@ -58,11 +58,26 @@ def _save_results_cache(c: dict) -> None:
         print(f"[espn] results cache save failed: {exc}")
 
 
+
+def _team_key(team: dict | None) -> str:
+    """The ledger key for an ESPN team object. Most sports key on the full name ("Dallas Cowboys");
+    college football keys on the school ("Ohio State"), because Kalshi labels schools, and a Power 4
+    team's opponent changes every week, so no hand-written alias map could cover them all."""
+    from ..matching import normalize_team
+    t = team or {}
+    return normalize_team(t.get(active().espn_team_field) or t.get("displayName") or "")
+
+
+def _sb_params(yyyymmdd: str) -> dict:
+    """Scoreboard query: the date plus any sport-specific params. College football asks explicitly
+    for every FBS game, since ESPN's default view narrows to ranked games at some points in a season."""
+    return {"dates": yyyymmdd, **dict(active().espn_scoreboard_params)}
+
 async def _scoreboard_events(client: httpx.AsyncClient, yyyymmdd: str) -> dict:
     """{frozenset(team_key, team_key): event_id} for one date."""
     from ..matching import normalize_team
     try:
-        r = await client.get(f"{_base()}/scoreboard", params={"dates": yyyymmdd}, timeout=15)
+        r = await client.get(f"{_base()}/scoreboard", params=_sb_params(yyyymmdd), timeout=15)
         events = r.json().get("events", []) if r.status_code == 200 else []
     except Exception as exc:  # noqa: BLE001
         print(f"[espn] scoreboard {yyyymmdd} failed: {exc}")
@@ -71,7 +86,7 @@ async def _scoreboard_events(client: httpx.AsyncClient, yyyymmdd: str) -> dict:
     for ev in events:
         try:
             comps = ev["competitions"][0]["competitors"]
-            keys = frozenset(normalize_team(c["team"]["displayName"]) for c in comps)
+            keys = frozenset(_team_key(c["team"]) for c in comps)
             if ev.get("id") and len(keys) >= 2:
                 out[keys] = ev["id"]
         except (KeyError, IndexError, TypeError):
@@ -87,7 +102,7 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
     out: dict = {}
     for d in sorted(set(dates)):
         try:
-            r = await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)
+            r = await client.get(f"{_base()}/scoreboard", params=_sb_params(d), timeout=15)
             events = r.json().get("events", []) if r.status_code == 200 else []
         except Exception as exc:  # noqa: BLE001
             print(f"[espn] kickoff scoreboard {d} failed: {exc}")
@@ -95,7 +110,7 @@ async def fetch_kickoffs(client: httpx.AsyncClient, dates: list[str]) -> dict:
         for ev in events:
             try:
                 comps = ev["competitions"][0]["competitors"]
-                keys = frozenset(normalize_team(c["team"]["displayName"]) for c in comps)
+                keys = frozenset(_team_key(c["team"]) for c in comps)
                 if ev.get("date") and len(keys) >= 2:
                     out[keys] = ev["date"]           # pair-keyed (WC: a pair plays once in the slate)
                     # date-qualified key for daily sports: a series repeats the same pair across days,
@@ -137,10 +152,87 @@ _BOX_FIELDS = {"possessionPct": "possession", "wonCorners": "corners",
                "totalShots": "shots", "shotsOnTarget": "sot"}
 
 
-def _player_lines(summary: dict) -> dict:
-    """{player_key: {"hits": n, "home runs": n, "outs recorded": n}} from an MLB box score; {} for
-    sports without batting/pitching groups (soccer). Outs come from innings pitched: '5.2' = 17."""
+_FOOTBALL_GROUPS = {"passing", "rushing", "receiving", "fumbles", "defensive", "interceptions",
+                    "kickreturns", "puntreturns", "kicking", "punting"}
+
+
+def _int(x) -> int:
+    try:
+        return int(float(x))
+    except (TypeError, ValueError):
+        return 0                      # ESPN prints "--" for an empty cell
+
+
+def _football_lines(summary: dict) -> dict:
+    """{player_key: {stat label: n}} from an NFL box score, in the stat labels the NFL adapter's prop
+    series carry. ESPN lists a player under a group only when he records something there, so a receiver
+    who played and caught nothing is simply absent from "receiving". Anyone who appears in ANY group
+    played, so every stat he did not record is 0, which is how Kalshi settles a player who took a snap.
+    A player in no group at all is left out, and his props void (Kalshi settles a no-snap player at
+    the pre-game price). "touchdowns" counts every way of SCORING one; a passer's TD throws are not
+    his touchdowns, so passing TDs stay out, exactly as Kalshi's anytime-TD rule reads."""
     from ..matching import normalize_team
+    raw: dict = {}
+    for tm in ((summary.get("boxscore") or {}).get("players") or []):
+        for grp in (tm.get("statistics") or []):
+            gtype = (grp.get("type") or grp.get("name") or "").lower()
+            if gtype not in _FOOTBALL_GROUPS:
+                continue
+            keys = grp.get("keys") or []
+            for a in (grp.get("athletes") or []):
+                nm = normalize_team(((a.get("athlete") or {}).get("displayName")) or "")
+                if not nm:
+                    continue
+                st = a.get("stats") or []
+                v = lambda k: _int(st[keys.index(k)]) if k in keys and keys.index(k) < len(st) else 0
+                d = raw.setdefault(nm, {})
+                if gtype == "passing":
+                    ca = keys.index("completions/passingAttempts") if "completions/passingAttempts" in keys else -1
+                    comp, _, att = (str(st[ca]) if 0 <= ca < len(st) else "").partition("/")
+                    d.update({"passing completions": _int(comp), "passing attempts": _int(att),
+                              "passing yards": v("passingYards"), "passing touchdowns": v("passingTouchdowns"),
+                              "interceptions thrown": v("interceptions")})
+                elif gtype == "rushing":
+                    d.update({"rushing attempts": v("rushingAttempts"), "rushing yards": v("rushingYards"),
+                              "_rush_td": v("rushingTouchdowns")})
+                elif gtype == "receiving":
+                    d.update({"receptions": v("receptions"), "receiving yards": v("receivingYards"),
+                              "_rec_td": v("receivingTouchdowns")})
+                elif gtype == "kickreturns":
+                    d["_kr_td"] = v("kickReturnTouchdowns")
+                elif gtype == "puntreturns":
+                    d["_pr_td"] = v("puntReturnTouchdowns")
+                elif gtype == "defensive":
+                    d["_def_td"] = v("defensiveTouchdowns")
+                elif gtype == "interceptions":
+                    d["_int_td"] = v("interceptionTouchdowns")
+    out: dict = {}
+    for nm, d in raw.items():
+        g = lambda k: d.get(k, 0)
+        out[nm] = {
+            "passing yards": g("passing yards"), "passing touchdowns": g("passing touchdowns"),
+            "passing attempts": g("passing attempts"), "passing completions": g("passing completions"),
+            "interceptions thrown": g("interceptions thrown"),
+            "rushing yards": g("rushing yards"), "rushing attempts": g("rushing attempts"),
+            "receiving yards": g("receiving yards"), "receptions": g("receptions"),
+            "rushing and receiving yards": g("rushing yards") + g("receiving yards"),
+            # a defensive return TD can show under both "defensive" and "interceptions": count it once
+            "touchdowns": (g("_rush_td") + g("_rec_td") + g("_kr_td") + g("_pr_td")
+                           + max(g("_def_td"), g("_int_td"))),
+        }
+    return out
+
+
+def _player_lines(summary: dict) -> dict:
+    """{player_key: {"hits": n, "home runs": n, "outs recorded": n}} from an MLB box score, or the NFL
+    stat lines from a football box score; {} for sports with neither (soccer, hockey). Outs come from
+    innings pitched: '5.2' = 17."""
+    from ..matching import normalize_team
+    groups = {(g.get("type") or g.get("name") or "").lower()
+              for tm in ((summary.get("boxscore") or {}).get("players") or [])
+              for g in (tm.get("statistics") or [])}
+    if groups & {"passing", "rushing", "receiving"}:
+        return _football_lines(summary)
     out: dict = {}
     for tm in ((summary.get("boxscore") or {}).get("players") or []):
         for grp in (tm.get("statistics") or []):
@@ -181,7 +273,7 @@ def _box_stats(summary: dict) -> dict:
     from ..matching import normalize_team
     out: dict = {}
     for tm in ((summary.get("boxscore") or {}).get("teams") or []):
-        tk = normalize_team(((tm.get("team") or {}).get("displayName")) or "")
+        tk = _team_key(tm.get("team"))
         if not tk:
             continue
         d: dict = {}
@@ -225,7 +317,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                                 "innings": c.get("innings") or {}})
             continue
         try:
-            sb = (await client.get(f"{_base()}/scoreboard", params={"dates": d}, timeout=15)).json()
+            sb = (await client.get(f"{_base()}/scoreboard", params=_sb_params(d), timeout=15)).json()
         except Exception as exc:  # noqa: BLE001
             print(f"[espn] results scoreboard {d} failed: {exc}")
             continue
@@ -252,7 +344,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
                         for cc in ev["competitions"][0]["competitors"]:
                             ls = cc.get("linescores") or []
                             if ls:
-                                inn[normalize_team((cc.get("team") or {}).get("displayName"))] = [
+                                inn[_team_key(cc.get("team"))] = [
                                     int(float(x.get("value", 0) or 0)) for x in ls]
                     except (KeyError, IndexError, TypeError, ValueError):
                         inn = {}
@@ -272,7 +364,7 @@ async def fetch_results(client: httpx.AsyncClient, dates: list[str]) -> list[dic
             innings: dict = {}                     # per-inning runs when the scoreboard carries linescores
             winner = None                          # the advancing team (ESPN's flag includes ET/penalties)
             for cc in comp:
-                tk = normalize_team((cc.get("team") or {}).get("displayName"))
+                tk = _team_key(cc.get("team"))
                 try:
                     goals[tk] = int(cc.get("score"))
                 except (TypeError, ValueError):

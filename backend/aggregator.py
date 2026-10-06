@@ -87,6 +87,21 @@ def _save_props_disk(props: list[dict]) -> None:
         print(f"[aggregator] props cache save failed: {exc}")
 
 
+def _in_scope(m) -> bool:
+    """True unless the sport restricts itself to a set of teams (college football: Power 4 + Notre Dame)
+    and this market involves none of them. A game counts if EITHER side is in scope, so a Power 4 team's
+    non-conference game stays in. Per-line markets carry their game pair packed into `group` (from the
+    ticker); one with no packed pair cannot be placed in a game, so under a filter it is dropped."""
+    keep = sports.active().team_filter
+    if not keep:
+        return True
+    teams = {s.key for s in m.selections}
+    packed = (m.group or "").split("|")
+    if len(packed) == 3:
+        teams |= {packed[1], packed[2]}
+    return bool(teams & keep)
+
+
 async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
     if not _free_cache["loaded"]:
         _free_cache["props"], _free_cache["props_fresh"] = _load_props_disk()   # survive a restart mid-block
@@ -95,6 +110,7 @@ async def get_free(force: bool = False) -> tuple[list[Market], list[dict]]:
             and (time.monotonic() - _free_cache["ts"]) < config.CACHE_TTL_SECONDS):
         return _free_cache["markets"], _free_cache["props"]
     markets, props = await _fetch_free()
+    markets = [m for m in markets if _in_scope(m)]
     # keep last-good props if this pull came back empty (PrizePicks throttles intermittently) — don't
     # blank the whole prop board + SGP on a transient miss. A fresh board persists to disk so the
     # last-good survives a process restart too. The last-good ages out at PROPS_MAX_STALE_DAYS so an
@@ -348,6 +364,7 @@ async def _noop(value):
 _TOTAL_TITLE_RE = re.compile(r"^(.+?) vs (.+?) total (?:runs|goals|points)", re.IGNORECASE)
 
 
+_no_kickoff_seen: set = set()
 _join_state: dict = {}
 
 
@@ -606,6 +623,12 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
         teams = teams[:2]
         if teams[0].fair_prob is None or teams[1].fair_prob is None:
             continue
+        gate = sports.active().max_lock_spread
+        if gate < 1.0:
+            widths = [q.ask - q.bid for t in teams for q in t.quotes
+                      if q.source == "kalshi" and q.ask is not None and q.bid is not None]
+            if not widths or max(widths) > gate:
+                continue                          # thin book: no forecast until it tightens
         a, b = teams[0].key, teams[1].key
         mp = model.match_probs(a, b) if model else None
         if model and not mp:
@@ -620,7 +643,24 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             # daily sports: the same pair repeats across a series, so only the date-qualified kickoff
             # is trustworthy (both sides of the lookup group by the same US-local scoreboard date)
             ko = kickoffs.get((frozenset((a, b)), gdate))
+            slack = sports.active().kickoff_date_slack
+            if ko is None and slack and gdate:
+                # Kalshi fixes a game's date when it lists it, so a college game listed before its kickoff
+                # was scheduled can carry the wrong day (it dated four Oct 17 games "Oct 16"). A team plays
+                # once a week, so the pair's game on a neighboring ESPN date is the same game: take ESPN's
+                # date for the row, which is also the date its result will settle under.
+                for k in sorted(range(-slack, slack + 1), key=abs)[1:]:
+                    d = (datetime.fromisoformat(gdate) + timedelta(days=k)).date().isoformat()
+                    if kickoffs.get((frozenset((a, b)), d)):
+                        ko, gdate = kickoffs[(frozenset((a, b)), d)], d
+                        break
         kdt = _parse_iso(ko)
+        if kdt is None and not doubleheader and (a, b, gdate) not in _no_kickoff_seen:
+            # a listed game ESPN cannot place is a game that can never lock, usually a name mismatch
+            # (college football meets new opponents weekly); say so once instead of failing silently
+            _no_kickoff_seen.add((a, b, gdate))
+            print(f"[ledger] no ESPN kickoff for {a} vs {b} on {gdate}: names may not match, "
+                  f"so this game cannot lock")
         # Forward-only, KICKOFF-aware: a game leaves the sheet only once it has actually kicked off. The
         # market date can lag a late kickoff by a day (a 01:00-03:00Z kickoff carries the previous day's
         # date), so a date-only check would drop live games at UTC midnight, hours before their lock
@@ -658,9 +698,17 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             pick = max(game_f5, key=game_f5.get)
             legs.append({"key": "f5", "side": "tie" if pick == "draw" else pick, "line": None,
                          "team": None, "prob": round(game_f5[pick], 3), "proj": None})
-        # the game's most competitive player props (closest to a coin flip) lock as graded legs too
+        # the game's most competitive player props lock as graded legs too. One line per player and
+        # stat: a ladder's rungs (25+, 40+, 50+ receiving yards) are the same bet several times, so only
+        # the rung closest to a coin flip counts. Then the most competitive, up to the sport's cap.
         game_props = (props or {}).get((frozenset((a, b)), (m.commence_time or "")[:16])) or []
-        for pr in sorted(game_props, key=lambda x: abs(x["fair"] - 0.5))[:3]:
+        main_line: dict = {}
+        for pr in game_props:
+            k = (pr["player_key"], pr["stat"])
+            if k not in main_line or abs(pr["fair"] - 0.5) < abs(main_line[k]["fair"] - 0.5):
+                main_line[k] = pr
+        cap = sports.active().ledger_props
+        for pr in sorted(main_line.values(), key=lambda x: abs(x["fair"] - 0.5))[:cap]:
             legs.append({"key": "player_prop", "stat": pr["stat"], "player": pr["player"],
                          "player_key": pr["player_key"], "line": pr["line"], "team": None,
                          "side": "over" if pr["fair"] >= 0.5 else "under",
@@ -1703,6 +1751,10 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             fdates = sorted({(m.commence_time or "").replace("-", "")[:8] for m in markets
                              if m.market_type == "moneyline"
                              and len((m.commence_time or "").replace("-", "")) >= 8})
+            slack = sports.active().kickoff_date_slack
+            if slack:   # fetch the neighboring ESPN dates too, so a mis-dated game can still be found
+                fdates = sorted({(datetime.strptime(d, "%Y%m%d") + timedelta(days=k)).strftime("%Y%m%d")
+                                 for d in fdates for k in range(-slack, slack + 1)})
             fkicks = await get_kickoffs(fdates)
             joins = {"total": _totals_by_game(markets), "player_prop": _props_by_game(markets),
                      "f5_moneyline": _f5_by_game(markets)}

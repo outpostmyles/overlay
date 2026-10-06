@@ -49,6 +49,8 @@ async function loadPaper() {
 // The World Cup keeps the default text in index.html, which describes its model-vs-market sheet.
 const ANCHOR_HINTS = {
   mlb: `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
+  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main total, and the game's most competitive player props, one line per player and stat. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated.`,
+  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline plus the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. No model rides here by design: the market line IS the forecast, and the ledger measures how well it is calibrated.`,
   nhl: `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
 };
 
@@ -145,9 +147,11 @@ function _triBar(p, a, b) {
     + `<i class="t-d" style="width:${w(p[1])}%" title="draw ${Math.round(p[1] * 100)}%"></i>`
     + `<i class="t-b" style="width:${w(p[2])}%" title="${esc(teamName(b))} win ${Math.round(p[2] * 100)}%"></i></span>`;
 }
+// what a game total counts, per sport (soccer and hockey count goals)
+const _TOTAL_UNIT = { mlb: "runs", nfl: "points", cfb: "points" };
+const _totalUnit = () => _TOTAL_UNIT[((state.snapshot || {}).meta || {}).sport] || "goals";
 // the model's explicit best guess on one extra market, as a labeled row
-const _runsSport = () => ((state.snapshot || {}).meta || {}).sport === "mlb";
-const _predName = (l) => l.key === "total_goals" ? (_runsSport() ? "Total runs" : "Total goals")
+const _predName = (l) => l.key === "total_goals" ? `Total ${_totalUnit()}`
   : l.key === "team_total" ? `${teamName(l.team)} goals`
   : l.key === "btts" ? "Both teams score"
   : l.key === "player_prop" ? `${l.player || ""} ${l.stat || ""}`.trim()
@@ -207,7 +211,7 @@ function _matchResultRow(r) {
 }
 // per-market hit rate across settled games (only counts legs that actually graded)
 function _legAccuracy(settled) {
-  const names = { total_goals: _runsSport() ? "Totals" : "Total goals", team_total: "Team totals",
+  const names = { total_goals: _totalUnit() === "goals" ? "Total goals" : "Totals", team_total: "Team totals",
                   btts: "BTTS", corners: "Corners", player_prop: "Player props", f5: "First 5" };
   const tally = {};
   settled.forEach((r) => (r.legs || []).forEach((l) => {

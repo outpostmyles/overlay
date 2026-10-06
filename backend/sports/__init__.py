@@ -35,6 +35,13 @@ class SportAdapter:
     aliases: dict                         # sport-specific name aliases, consulted before the global map
     results_window_days: int              # how far back the ESPN results sweep looks (tiny for daily sports)
     pair_only_key: bool                   # merge moneylines on the team pair alone (WC) vs pair+date+time (MLB)
+    # Optional knobs (added for football). Each default reproduces the pre-football behavior exactly.
+    ledger_props: int = 3                 # prop legs locked per game: one line per player+stat, most competitive first
+    team_filter: frozenset = frozenset()  # if set, keep only games that involve at least one of these team keys
+    espn_team_field: str = "displayName"  # ESPN team field the keys come from ("location" = the school name)
+    espn_scoreboard_params: tuple = ()    # extra ESPN scoreboard params, as (name, value) pairs
+    max_lock_spread: float = 1.0          # a game whose Kalshi moneyline book is wider than this never locks
+    kickoff_date_slack: int = 0           # days either side to find the game on ESPN (weekly sports only)
 
 
 _REGISTRY: dict[str, SportAdapter] = {}
@@ -66,3 +73,5 @@ def active() -> SportAdapter:
 from . import wc26  # noqa: E402,F401  (import registers the adapter)
 from . import mlb   # noqa: E402,F401
 from . import nhl   # noqa: E402,F401
+from . import nfl   # noqa: E402,F401
+from . import cfb   # noqa: E402,F401

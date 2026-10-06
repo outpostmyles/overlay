@@ -11,6 +11,11 @@ WorkingDirectory=/opt/overlay
 Environment=PYTHONUNBUFFERED=1
 # PYTHONUNBUFFERED flushes the app's heartbeat/aggregator print() lines to the journal in real time
 # (otherwise Python block-buffers stdout under systemd and the operational logs look empty).
+Environment=HEARTBEAT_ENABLED=false
+# The World Cup is finished: every forecast and pick has settled, so the 5-minute heartbeat has nothing
+# left to lock or grade. Off, this board still serves the archive on request, and its memory can sit
+# idle in swap, which makes room on a 1 GB Droplet for the live sports. (A unit's Environment= beats
+# .env, because the app only fills variables that are not already set.)
 ExecStart=/opt/overlay/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

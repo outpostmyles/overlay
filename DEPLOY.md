@@ -69,28 +69,36 @@ systemctl status overlay
 journalctl -u overlay -f      # look for "[heartbeat] enabled..." then periodic "[aggregator] ..." lines
 ```
 
-## Running more sports (MLB, NHL)
+## Running more sports (MLB, NHL, NFL, college football)
 
 Each sport is its own process: the same code and the same `poly.db` (ledger rows are tagged by sport),
 selected by a `SPORT` environment variable and bound to its own port. The unit files ship in `deploy/`:
 
 | Unit | Sport | Port |
 |---|---|---|
-| `overlay` | World Cup 2026 (finished, kept as an archive) | 8000, behind nginx on 80 |
+| `overlay` | World Cup 2026 (finished, kept as an archive; heartbeat off) | 8000, behind nginx on 80 |
 | `overlay-mlb` | MLB | 8001 |
 | `overlay-nhl` | NHL (from 2026-10-06) | 8002 |
+| `overlay-nfl` | NFL (from 2026-10-06) | 8003 |
+| `overlay-cfb` | College football, Power 4 + Notre Dame only (from 2026-10-06) | 8004 |
 
 ```bash
-cp /opt/overlay/deploy/overlay-nhl.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now overlay-nhl
-journalctl -u overlay-nhl -f      # expect "[sports] active adapter: nhl (NHL)"
+cp /opt/overlay/deploy/overlay-{nhl,nfl,cfb}.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now overlay-nhl overlay-nfl overlay-cfb
+journalctl -u overlay-nfl -f      # expect "[sports] active adapter: nfl (NFL)"
 ```
 
-Memory is the constraint on a 1 GB Droplet: each process holds roughly 120 to 170 MB. Check `free -m`
-after adding one; past three sports, move to a 2 GB Droplet.
+Memory is the constraint on a 1 GB Droplet: each process holds roughly 120 to 170 MB. The World Cup unit
+runs with its heartbeat off (the tournament is over and fully settled), so that process sits idle and
+the kernel can move it to swap. Check `free -m` after adding a sport; if `available` stays under about
+100 MB, move to a 2 GB Droplet.
 
-The MLB and NHL units bind `0.0.0.0` with no auth, by the owner's choice, so they are reachable at
-`http://YOUR_DROPLET_IP:8001` and `:8002`. That is a deliberate exception to the advice below. The
+`[ledger]` lines in the journal are worth a look. One reading "no ESPN kickoff" means a listed game
+cannot lock, usually because a team name did not match; one reading "listed but 0 joined" means a feed
+changed its format.
+
+The sport units bind `0.0.0.0` with no auth, by the owner's choice, so they are reachable at
+`http://YOUR_DROPLET_IP:8001` through `:8004`. That is a deliberate exception to the advice below. The
 server runs with every API key blank, so a visitor cannot trigger a paid call, but anyone with the URL
 can see the board.
 
@@ -121,7 +129,7 @@ sudo -u overlay cp /opt/overlay/poly.db /opt/overlay/backups/poly-$(date +%F).db
 ```bash
 cd /opt/overlay && sudo -u overlay git pull
 sudo -u overlay .venv/bin/pip install -q -r requirements.txt   # only if requirements changed
-systemctl restart overlay overlay-mlb overlay-nhl   # every installed unit; each runs the new code
+systemctl restart overlay overlay-mlb overlay-nhl overlay-nfl overlay-cfb   # every installed unit
 ```
 
 The new forecast table is created automatically on startup, and the ledger is forward-only, so updates

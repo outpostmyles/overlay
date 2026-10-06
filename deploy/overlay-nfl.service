@@ -1,0 +1,19 @@
+[Unit]
+Description=Overlay NFL - anchor-only board, player props + self-grading prediction ledger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=overlay
+WorkingDirectory=/opt/overlay
+Environment=PYTHONUNBUFFERED=1
+Environment=SPORT=nfl
+# Another sport, same repo and database (ledger rows are sport-scoped); binds its own public port so
+# the other boards are untouched. Free feeds only; the shared keys-blank .env keeps it $0.
+ExecStart=/opt/overlay/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8003
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
