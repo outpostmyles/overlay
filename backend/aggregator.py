@@ -21,7 +21,7 @@ from .matching import moneyline_key, normalize_team
 from .model import corners, ratings, tournament
 from .models import Market, Quote, Selection
 from .sources import apifootball, espn, kalshi, polymarket, prizepicks, theoddsapi, toptraders, weather
-from .store import leans, livelegs, mybets, paper
+from .store import leans, livelegs, lottotrack, mybets, paper
 
 _free_cache: dict = {"markets": [], "props": [], "ts": 0.0, "loaded": False,
                      "props_fresh": 0.0}   # wall-clock of the last real (non-fallback) props pull
@@ -2093,10 +2093,23 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
             # lotto: a 15-leg ticket can mix the NFL, college, the NHL and MLB
             livelegs.write(sports.active().key, live, picks_board.get("team_names") or {})
             boards = livelegs.read_all()
-            picks_board["lotto"] = {"legs": lotto.candidates(boards),
+            pool = lotto.candidates(boards, now_utc)
+            end = lotto.weekend_end(now_utc)
+            picks_board["lotto"] = {"legs": pool, "tickets": lotto.tickets(pool),
+                                    "weekend": end.date().isoformat(),
+                                    "freeze_at": lotto.freeze_at(end).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                     "boards": {k: {"games": len(b.get("games") or []),
                                                    "age_min": round((time.time() - b["ts"]) / 60)}
                                                for k, b in boards.items()}}
+            try:
+                # the record: freeze this weekend's $2 tickets on Saturday morning, grade every leg after
+                lottotrack.maybe_freeze([t for t in picks_board["lotto"]["tickets"] if t["stake"] == lotto.TRACK_STAKE],
+                                        end, lotto.freeze_at(end), now_utc)
+                lottotrack.settle()
+                picks_board["lotto"]["tracked"] = lottotrack.list_tickets()
+                picks_board["lotto"]["study"] = lottotrack.study()
+            except Exception as exc:  # noqa: BLE001  (the lotto record never costs the board a cycle)
+                print(f"[lotto] record skipped: {exc}")
             if sports.active().research:
                 picks_board["model_ledger"]["research_study"] = paper.research_study()
                 picks_board["model_ledger"]["research_catalog"] = research.catalog(sports.active().key)

@@ -527,6 +527,9 @@ td .rchip { margin-left: 4px; }
 .lt-leg { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 12px; line-height: 1.5; }
 .lt-p { font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
 .lt-load { margin-top: 10px; width: 100%; justify-content: center; }
+.lt-card { margin-top: 12px; }
+.lt-week { margin-top: 8px; }
+.lt-wk { font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; margin: 6px 0 2px; }
 /* top bettors */
 .tb-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .tb-line { border-top: 1px solid rgba(255,255,255,.06); padding-top: 5px; }

@@ -862,99 +862,94 @@ document.addEventListener("input", (e) => {
   }
 });
 
-// ---------- render: Lotto (fun-money 10-20 leg weekend parlays from sensible legs) ----------
+// ---------- render: Lotto ($2-3 weekend parlays built to pay $1,000+, every weekend's tickets tracked) ----------
 const _LOTTO_FLAGS = { heavy: ["heavy favorite", "trk"], value: ["value at DraftKings", "adj"], top: ["top bettors' side", "trk"],
                        research: ["research: wind", "adj"], no_report: ["no injury report", "cau"] };
+const _money0 = (n) => "$" + Math.round(n).toLocaleString();
 function _lottoState() {
   if (!state.lotto) {
     let saved = null;
-    try { saved = JSON.parse(localStorage.getItem("overlay_lotto") || "null"); } catch (e) { saved = null; }
-    state.lotto = { n: 12, stake: 2, off: [], picked: [], ...(saved || {}) };
+    try { saved = JSON.parse(localStorage.getItem("overlay_lotto2") || "null"); } catch (e) { saved = null; }
+    state.lotto = { stake: 2, target: 1000, variant: "favorites", ...(saved || {}) };
   }
   return state.lotto;
 }
-function _lottoSave() { try { localStorage.setItem("overlay_lotto", JSON.stringify(state.lotto)); } catch (e) { /* this visit only */ } }
-// up to n legs from the pool in `rank` order, one per game (two legs from one game move together)
-function _lottoPick(pool, n, rank, seed = []) {
-  const out = [...seed], used = new Set(seed.map((l) => l.dedup));
-  for (const leg of [...pool].sort(rank)) {
-    if (out.length >= n) break;
-    if (used.has(leg.dedup)) continue;
-    out.push(leg); used.add(leg.dedup);
-  }
-  return out;
+function _lottoSave() { try { localStorage.setItem("overlay_lotto2", JSON.stringify(state.lotto)); } catch (e) { /* this visit only */ } }
+const _flagChips = (flags) => (flags || []).filter((f) => f !== "heavy")
+  .map((f) => `<span class="rchip ${(_LOTTO_FLAGS[f] || [])[1] || ""}">${esc((_LOTTO_FLAGS[f] || [f])[0])}</span>`).join(" ");
+function _lottoLegRow(l) {
+  const res = l.result ? `<span class="tag ${l.result === "won" ? "won" : l.result === "lost" ? "lost" : ""}">${esc(l.result)}</span>` : "";
+  return `<div class="lt-leg"><span><span class="tb-plat p">${esc((l.sport || "").toUpperCase())}</span> <b>${esc(l.label)}</b> <span class="muted">${esc(l.game)} · ${_koLabel(l.kickoff_iso)}</span> ${_flagChips(l.flags)}</span>
+    <span class="lt-p">${res} ${Math.round(l.p * 100)}%</span></div>`;
 }
-function _lottoTickets(pool, n) {
-  const val = (l) => ((l.flags || []).includes("value") ? 0.03 : 0);   // a priced edge earns its place first
-  const near = (t) => (a, b) => (Math.abs(a.p - t) - val(a)) - (Math.abs(b.p - t) - val(b));
-  const research = pool.filter((l) => (l.flags || []).includes("research")).slice(0, 2);
-  const ml = pool.filter((l) => l.kind === "ml");
-  return [
-    { key: "safe", name: `Safest ${n}`, sub: "the most likely legs on the board", legs: _lottoPick(ml, n, (a, b) => (b.p + val(b)) - (a.p + val(a))) },
-    { key: "mid", name: `Middle ${n}`, sub: "favorites around 80%", legs: _lottoPick(ml, n, near(0.80)) },
-    { key: "long", name: `Long shot ${n}`, sub: "favorites around 70%, plus the research legs", legs: _lottoPick(ml, n, near(0.70), research) },
-  ];
-}
-function _lottoStats(legs, stake) {
-  const P = legs.reduce((a, l) => a * l.p, 1);
-  const dkAll = legs.length && legs.every((l) => l.dk);
-  const dkDec = dkAll ? legs.reduce((a, l) => a * _amToDec(l.dk), 1) : null;
-  return { P, oneIn: Math.round(1 / P), fair: stake / P, dk: dkDec ? stake * dkDec : null, ev: dkDec ? P * dkDec - 1 : null };
-}
-function _lottoCard(t, stake, n) {
-  if (!t.legs.length) return "";
-  const st = _lottoStats(t.legs, stake);
-  const short = t.legs.length < n ? `<div class="cal-note muted"><span>Only ${t.legs.length} sensible legs this weekend so far; more fill in as games get closer.</span></div>` : "";
-  const legs = t.legs.map((l) => `<div class="lt-leg"><span><span class="tb-plat p">${esc(l.sport.toUpperCase())}</span> <b>${esc(l.label)}</b> <span class="muted">${esc(l.game)} · ${_koLabel(l.kickoff_iso)}</span>
-      ${(l.flags || []).filter((f) => f !== "heavy").map((f) => `<span class="rchip ${(_LOTTO_FLAGS[f] || [])[1] || ""}">${esc((_LOTTO_FLAGS[f] || [f])[0])}</span>`).join(" ")}</span>
-      <span class="lt-p">${Math.round(l.p * 100)}%</span></div>`).join("");
-  const dk = st.dk != null ? `<div class="rs-line">DraftKings would pay about <b>$${st.dk.toFixed(0)}</b> <span class="ev ${st.ev >= 0 ? "pos" : "neg"}">${_evTxt(st.ev)} expected</span></div>` : "";
+function _lottoTicketHTML(t) {
+  const P = t.p, stake = t.stake;
+  const miss = t.reached ? "" : `<div class="cal-note">${ico("shield")} <span>No 20 sensible legs pay ${_money0(t.target)} this weekend yet. This is the biggest one there is; more games fill in as the week goes on.</span></div>`;
+  const dk = t.dk_payout ? `<div class="rs-line">DraftKings would pay about <b>${_money0(t.dk_payout)}</b> <span class="muted">(each leg's margin compounds)</span></div>` : "";
   return `<div class="fcard lt-card">
-    <div class="fcard-h"><span class="fcard-m"><b>${esc(t.name)}</b> <span class="muted">· ${esc(t.sub)}</span></span></div>
-    <div class="lt-hero"><span class="lt-odds">1 in ${st.oneIn.toLocaleString()}</span><span class="muted">${(st.P * 100).toFixed(st.P < 0.01 ? 2 : 1)}% to hit</span></div>
-    <div class="rs-line">$${stake} pays about <b>$${st.fair.toFixed(0)}</b> at fair odds <span class="muted">(${_amer(_decToAm(1 / st.P))})</span></div>
-    ${dk}${short}
-    <div class="lt-legs">${legs}</div>
-    <button class="btn lt-load" data-lotto-load="${t.key}">Load into Bet Slip</button>
+    <div class="lt-hero"><span class="lt-odds">${esc(_money0(t.fair_payout))}</span><span class="muted">on $${stake} at fair odds · 1 in ${Math.round(1 / P).toLocaleString()} to hit · ${t.legs.length} legs</span></div>
+    ${dk}${miss}
+    <div class="lt-legs">${t.legs.map(_lottoLegRow).join("")}</div>
+    <button class="btn lt-load" data-lotto-load="1">Load into Bet Slip</button>
   </div>`;
+}
+function _lottoTrackedHTML(lotto) {
+  const tracked = lotto.tracked || [];
+  const weekend = lotto.weekend;
+  const now = tracked.filter((t) => t.weekend === weekend);
+  const fz = new Date(lotto.freeze_at);
+  const waiting = !now.length ? `<div class="muted" style="padding:6px 2px">This weekend's six tickets ($1,000, $2,500 and $5,000, each built two ways) freeze ${isNaN(fz) ? "Saturday morning" : fz.toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" })} and grade on their own, bet or not.</div>` : "";
+  const row = (t) => {
+    const status = t.status === "hit" ? `<span class="tag won">hit</span>` : t.status === "missed" ? `<span class="tag lost">missed</span>` : `<span class="tag">live</span>`;
+    const legs = `${t.legs_won}/${t.legs.length - (t.legs_void || 0)} legs won${t.legs_void ? `, ${t.legs_void} void` : ""}`;
+    return `<details class="tb-line"><summary><span class="tb-side">${esc(_money0(t.target))}+ · ${esc(t.variant)} ${status}</span><span class="tb-sum">${legs} · pays ${esc(_money0(t.fair_payout))} · 1 in ${Math.round(1 / t.p).toLocaleString()}</span></summary>${t.legs.map(_lottoLegRow).join("")}</details>`;
+  };
+  const byWeekend = {};
+  tracked.forEach((t) => (byWeekend[t.weekend] = byWeekend[t.weekend] || []).push(t));
+  const blocks = Object.keys(byWeekend).sort().reverse().map((w) => `<div class="lt-week"><div class="muted lt-wk">Weekend ending ${esc(w)}</div>${byWeekend[w].map(row).join("")}</div>`).join("");
+  return `<div class="pick-section"><h3>${ico("track")} Tracked tickets <span class="muted">· frozen every Saturday morning and graded leg by leg, whether you bet them or not</span></h3>${waiting}${blocks}</div>`;
+}
+function _lottoStudyHTML(st) {
+  if (!st || !st.legs || !st.legs.length) return `<div class="pick-section"><h3>${ico("value")} What the tickets are teaching</h3><div class="muted" style="padding:6px 2px">Fills in as the first tracked legs grade. Each row compares how often a kind of leg actually won with what its price said; a group that keeps winning less than priced comes off future tickets.</div></div>`;
+  const pct = (v) => (v != null ? v.toFixed(1) + "%" : "-");
+  const names = { all: "All legs", style: "Construction", sport: "Sport", band: "Price", flag: "Research flag" };
+  const rows = st.legs.map((r) => `<tr><td><span class="muted">${esc(names[r.group] || r.group)}</span> <b>${esc(r.label)}</b></td><td class="num">${r.n}</td><td class="num">${pct(r.priced)}</td><td class="num">${pct(r.actual)}</td><td class="num ${r.z == null ? "" : r.z >= 2 ? "pos" : r.z <= -2 ? "neg" : ""}">${r.z == null ? "-" : r.z}</td></tr>`).join("");
+  const close = (st.closest || []).length ? `<div class="cal-note muted"><span>Closest calls: ${st.closest.map((c) => `${c.won} of ${c.legs} legs (${esc(_money0(c.target))}+ ${esc(c.variant)}, ${esc(c.weekend)})`).join(" · ")}</span></div>` : "";
+  return `<div class="pick-section"><h3>${ico("value")} What the tickets are teaching <span class="muted">· ${st.graded} graded of ${st.tickets} tickets over ${st.weekends} weekend${st.weekends === 1 ? "" : "s"}; ${st.hits} hit against ${st.expected_hits} expected</span></h3>
+    <div class="tbl-scroll"><table class="flat"><thead><tr><th>Legs</th><th class="num">Graded</th><th class="num">Priced to win</th><th class="num">Actually won</th><th class="num">z</th></tr></thead><tbody>${rows}</tbody></table></div>${close}</div>`;
 }
 function renderLotto() {
   const box = $("#lotto-body"); if (!box) return;
   const lotto = (state.snapshot && state.snapshot.picks && state.snapshot.picks.lotto) || null;
   if (!lotto) { box.innerHTML = `<div class="muted" style="padding:14px">The lotto builder fills in once the boards have games this weekend.</div>`; return; }
   const ls = _lottoState();
+  const t = (lotto.tickets || []).find((x) => x.stake === ls.stake && x.target === ls.target && x.variant === ls.variant);
+  state.lottoTicket = t;
   const boards = Object.keys(lotto.boards || {}).sort();
-  const pool = (lotto.legs || []).filter((l) => !ls.off.includes(l.sport));
-  const tickets = _lottoTickets(pool, ls.n);
-  state.lottoTickets = tickets;
   const controls = `<div class="slip-form lt-controls">
-      <label>Legs <select id="lotto-n">${[10, 12, 14, 15, 16, 18, 20].map((k) => `<option ${k === ls.n ? "selected" : ""}>${k}</option>`).join("")}</select></label>
       <label>Stake <select id="lotto-stake">${[2, 3].map((k) => `<option value="${k}" ${k === ls.stake ? "selected" : ""}>$${k}</option>`).join("")}</select></label>
-      <span class="lt-sports">${boards.map((b) => `<label class="lt-sport"><input type="checkbox" data-lotto-sport="${esc(b)}" ${ls.off.includes(b) ? "" : "checked"}> ${esc(b.toUpperCase())} <span class="muted">${lotto.boards[b].games}</span></label>`).join("")}</span>
+      <label>Pays at least <select id="lotto-target">${[1000, 2500, 5000].map((k) => `<option value="${k}" ${k === ls.target ? "selected" : ""}>${_money0(k)}</option>`).join("")}</select></label>
+      <label>Legs <select id="lotto-variant">${[["favorites", "most likely favorites"], ["research", "research legs first"]].map(([k, v]) => `<option value="${k}" ${k === ls.variant ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     </div>`;
-  const note = `<div class="cal-note muted"><span>Every leg here is a favorite the market prices fairly on average (the 25-year NFL test found no hidden favorite edge), so a long ticket is a lottery ticket, not an investment. A sportsbook also pays less than fair on parlays because each leg's margin compounds. Expect to lose most weekends; keep it to fun money. <b>${pool.length}</b> sensible legs this weekend across ${boards.length} board${boards.length === 1 ? "" : "s"}.</span></div>`;
-  box.innerHTML = controls + note + `<div class="fgrid lt-grid">${tickets.map((t) => _lottoCard(t, ls.stake, ls.n)).join("")}</div>`
-    + (pool.length ? "" : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`);
+  const note = `<div class="cal-note muted"><span>A ticket that pays 500 times the stake is a 1-in-500 shot at fair odds, whatever its legs: the payout sets the odds. So each ticket reaches its payout with the most likely favorites it can, sliding to riskier ones (never under 60%) only as far as the payout needs, up to 20 legs. <b>${(lotto.legs || []).length}</b> sensible legs this weekend across ${boards.map((b) => b.toUpperCase()).join(", ") || "no boards"}.</span></div>`;
+  box.innerHTML = controls + note + (t ? _lottoTicketHTML(t) : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`)
+    + _lottoTrackedHTML(lotto) + _lottoStudyHTML(lotto.study);
 }
 document.addEventListener("change", (e) => {
   const ls = state.lotto; if (!ls) return;
-  if (e.target.id === "lotto-n") { ls.n = parseInt(e.target.value, 10); _lottoSave(); renderLotto(); }
-  else if (e.target.id === "lotto-stake") { ls.stake = parseInt(e.target.value, 10); _lottoSave(); renderLotto(); }
-  else if (e.target.dataset && e.target.dataset.lottoSport) {
-    const sp = e.target.dataset.lottoSport;
-    ls.off = e.target.checked ? ls.off.filter((x) => x !== sp) : [...ls.off, sp];
-    _lottoSave(); renderLotto();
-  }
+  const map = { "lotto-stake": "stake", "lotto-target": "target", "lotto-variant": "variant" };
+  if (!map[e.target.id]) return;
+  ls[map[e.target.id]] = e.target.id === "lotto-variant" ? e.target.value : parseInt(e.target.value, 10);
+  _lottoSave(); renderLotto();
 });
 document.addEventListener("click", (e) => {
-  const load = e.target.closest("[data-lotto-load]");
-  if (!load) return;
-  const t = (state.lottoTickets || []).find((x) => x.key === load.getAttribute("data-lotto-load"));
+  if (!e.target.closest("[data-lotto-load]")) return;
+  const t = state.lottoTicket;
   if (!t) return;
   const slip = _slipLoad();
   slip.legs = t.legs.map((l) => ({ dedup: l.dedup, kind: l.kind, team: l.team, dir: l.dir, line: l.line, p: l.p,
                                    team_a: l.team_a, team_b: l.team_b, label: l.label, game: l.game, sport: l.sport }));
-  slip.stake = String(state.lotto.stake);
+  slip.stake = String(t.stake);
   slip.price = "";
   _slipSave();
   switchTab("slip");

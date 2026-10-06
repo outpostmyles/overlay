@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import aggregator, config, futures_read, propread, sports
-from .store import leans, livelegs, mybets, paper
+from .store import leans, livelegs, lottotrack, mybets, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
@@ -38,6 +38,7 @@ def _startup() -> None:
     print(f"[sports] active adapter: {adapter.key} ({adapter.display_name})")
     paper.init_paper()
     mybets.init()
+    lottotrack.init()
 
 
 @app.on_event("startup")
