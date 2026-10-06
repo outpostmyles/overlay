@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Pulls the server's nightly ledger backups to this Mac once a day (and whenever it wakes having
+     missed a run), so a copy always lives off the server. Replace YOUR_DROPLET_IP, then:
+       cp deploy/com.overlay.backup-pull.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.overlay.backup-pull.plist
+     To stop it: launchctl bootout gui/$(id -u)/com.overlay.backup-pull -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.overlay.backup-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>mkdir -p "$HOME/OverlayBackups" &amp;&amp; /usr/bin/rsync -a -e "/usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=20" root@YOUR_DROPLET_IP:/opt/overlay/backups/ "$HOME/OverlayBackups/" &amp;&amp; date "+%F %T pulled" &gt;&gt; "$HOME/OverlayBackups/pull.log"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>15</integer></dict>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/overlay-backup-pull.err</string>
+</dict>
+</plist>

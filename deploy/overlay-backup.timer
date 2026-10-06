@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the Overlay ledger every night
+
+[Timer]
+# 09:30 UTC is 5:30 a.m. Eastern, after the last West Coast game has settled. Persistent catches up
+# on a night the server was down.
+OnCalendar=*-*-* 09:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

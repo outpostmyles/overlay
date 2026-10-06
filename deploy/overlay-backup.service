@@ -1,0 +1,8 @@
+[Unit]
+Description=Overlay ledger backup (poly.db to backups/, checked, compressed, pruned)
+
+[Service]
+Type=oneshot
+User=overlay
+WorkingDirectory=/opt/overlay
+ExecStart=/opt/overlay/.venv/bin/python /opt/overlay/deploy/backup_ledger.py

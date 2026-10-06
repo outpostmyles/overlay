@@ -129,12 +129,23 @@ A `ufw` firewall allowing only SSH (22) and, if you use nginx, HTTPS (443) is a 
 
 ## Keeping data safe
 
-`poly.db` and the `poly_*.json` caches in `/opt/overlay` are your history. They are gitignored (never
-committed) and live only on the Droplet, so back them up if they matter to you:
+`poly.db` in `/opt/overlay` is your history: every forecast, every grade, and the bets you log. It is
+gitignored (never committed) and lives only on the Droplet, so two jobs back it up.
+
+On the server, `overlay-backup.timer` runs `deploy/backup_ledger.py` every night at 09:30 UTC. It takes a
+consistent copy with SQLite's online backup (safe while the boards write), checks it, compresses it to
+`/opt/overlay/backups/poly-YYYY-MM-DD.db.gz`, and keeps 30 days plus each month's first copy for a year:
 
 ```bash
-sudo -u overlay cp /opt/overlay/poly.db /opt/overlay/backups/poly-$(date +%F).db   # e.g. via a daily cron
+cp /opt/overlay/deploy/overlay-backup.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now overlay-backup.timer
+systemctl start overlay-backup && journalctl -u overlay-backup -n 5   # run one now and read the result
 ```
+
+Off the server, `deploy/com.overlay.backup-pull.plist` is a macOS LaunchAgent that pulls the backups folder
+into `~/OverlayBackups` once a day (and on wake after a missed day) over the same SSH access you deploy
+with. Put your Droplet's IP in it, then follow the two commands in its header comment. To restore, stop
+the services, `gunzip` a copy over `/opt/overlay/poly.db` (owned by `overlay`), and start them again.
 
 ## Updating
 
