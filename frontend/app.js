@@ -49,8 +49,8 @@ async function loadPaper() {
 // The World Cup keeps the default text in index.html, which describes its model-vs-market sheet.
 const ANCHOR_HINTS = {
   mlb: `A pre-first-pitch <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total, the first-5-innings result, and the game's most competitive player props. Every line locks, then grades off the free box score (props void on a DNP; rainouts void, never lose). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
-  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main total, and the game's most competitive player props, one line per player and stat. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated.`,
-  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline plus the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. No model rides here by design: the market line IS the forecast, and the ledger measures how well it is calibrated.`,
+  nfl: `A pre-kickoff <b>prediction sheet</b> for every game, frozen ~75 minutes before kickoff (after inactives are announced): the de-vigged market's call on the moneyline, the main spread and total, and a prop sheet built from the five props that matter (passing, rushing and receiving yards, receptions, and anytime TD): the starting QBs, the lead backs, the featured receivers, and the likeliest scorers. Everything grades off the free ESPN box score. A player who never takes a snap voids, the way Kalshi settles him; one snap and he is graded on what he recorded, zero included. No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated.`,
+  cfb: `A pre-kickoff <b>prediction sheet</b> for every Power 4 and Notre Dame game, frozen ~75 minutes before kickoff: the de-vigged market's call on the moneyline, the main spread, and the main total, graded off the free ESPN final. A game whose Kalshi book is still thin (wider than 10 cents) waits until it tightens, because a thin book is not a sharp line. No model rides here by design: the market line IS the forecast, and the ledger measures how well it is calibrated.`,
   nhl: `A pre-puck-drop <b>prediction sheet</b> for every game, frozen ~75 minutes before start: the de-vigged market's call on the moneyline plus the main total. Both lock, then grade off the free ESPN final, with overtime and shootouts counted exactly as the market settles them (a shootout winner is credited one goal). No model rides here by design: the sharp market line IS the forecast, and the ledger measures how well it is calibrated, including whether the locked line loses information to the close.`,
 };
 
@@ -151,20 +151,28 @@ function _triBar(p, a, b) {
 const _TOTAL_UNIT = { mlb: "runs", nfl: "points", cfb: "points" };
 const _totalUnit = () => _TOTAL_UNIT[((state.snapshot || {}).meta || {}).sport] || "goals";
 // the model's explicit best guess on one extra market, as a labeled row
+const _isAnytimeTd = (l) => l.stat === "touchdowns" && l.line === 0.5;
 const _predName = (l) => l.key === "total_goals" ? `Total ${_totalUnit()}`
   : l.key === "team_total" ? `${teamName(l.team)} goals`
   : l.key === "btts" ? "Both teams score"
+  : l.key === "spread" ? "Spread"
+  : l.key === "player_prop" && _isAnytimeTd(l) ? `${l.player || ""} to score a TD`.trim()
   : l.key === "player_prop" ? `${l.player || ""} ${l.stat || ""}`.trim()
   : l.key === "f5" ? "First 5 innings"
   : l.key === "corners" ? "Corners" : l.key;
 const _predPick = (l) => l.key === "btts" ? (l.side === "yes" ? "Yes" : "No")
+  : l.key === "spread" ? (l.side === "cover" ? `${teamName(l.team)} -${l.line}` : `${teamName(l.opp)} +${l.line}`)
+  : l.key === "player_prop" && _isAnytimeTd(l) ? (l.side === "over" ? "Yes" : "No")
   : l.key === "player_prop" ? (l.side === "over" ? `${Math.ceil(l.line)}+` : `Under ${Math.ceil(l.line)}`)
   : l.key === "f5" ? (l.side === "tie" ? "Tie" : teamName(l.side))
   : `${l.side === "over" ? "Over" : "Under"} ${l.line}`;
 // our guess = the projected number (the best estimate) + the resulting pick, e.g. "2.6 · Under 2.5"
 const _predGuess = (l) => (l.proj != null ? `${l.proj} · ` : "") + _predPick(l);
 const _predActual = (l) => l.result === "pending" ? "awaiting"
-  : l.key === "btts" ? (l.actual === "yes" ? "Yes" : "No") : String(l.actual);
+  : l.key === "btts" ? (l.actual === "yes" ? "Yes" : "No")
+  : l.key === "spread" ? (l.actual > 0 ? `${teamName(l.team)} by ${l.actual}`
+                          : l.actual < 0 ? `${teamName(l.opp)} by ${-l.actual}` : "Tie")
+  : String(l.actual);
 function _predRowsInner(legs, graded) {
   return (legs || []).map((l) => {
     const name = `<span class="pred-l">${esc(_predName(l))}</span>`;
@@ -212,7 +220,8 @@ function _matchResultRow(r) {
 // per-market hit rate across settled games (only counts legs that actually graded)
 function _legAccuracy(settled) {
   const names = { total_goals: _totalUnit() === "goals" ? "Total goals" : "Totals", team_total: "Team totals",
-                  btts: "BTTS", corners: "Corners", player_prop: "Player props", f5: "First 5" };
+                  btts: "BTTS", corners: "Corners", player_prop: "Player props", f5: "First 5",
+                  spread: "Spreads" };
   const tally = {};
   settled.forEach((r) => (r.legs || []).forEach((l) => {
     if (l.result !== "won" && l.result !== "lost") return;

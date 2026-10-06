@@ -15,6 +15,8 @@ def test_cfb_adapter_scope_and_knobs():
     assert "uconn" not in a.team_filter                    # the other FBS independent is out of scope
     assert a.espn_team_field == "location" and a.max_lock_spread == 0.10
     assert dict(a.espn_scoreboard_params) == {"groups": "80", "limit": "300"}
+    assert a.kalshi_series["KXNCAAFSPREAD"] == ("spread", "Lines")    # the owner bets spreads here
+    assert not any(v[0] == "player_prop" for v in a.kalshi_series.values())
 
 
 def test_school_names_line_up(monkeypatch):
@@ -57,6 +59,9 @@ def test_scope_keeps_any_game_with_one_in_scope_team(monkeypatch):
     total = Market(market_id="kalshi:t", event="Over 51.5 points", market_type="total",
                    selections=[], commence_time="2026-10-10", group="Lines|navy|notre dame")
     assert aggregator._in_scope(total)
+    spread = Market(market_id="kalshi:s", event="x", market_type="spread", selections=[],
+                    commence_time="2026-10-10", group="Lines|navy|notre dame|notre dame")
+    assert aggregator._in_scope(spread)                                    # spreads carry a 4th field
     total.group = "Lines"                                                  # no game attached: drop it
     assert not aggregator._in_scope(total)
     monkeypatch.setattr(config, "SPORT", "nfl")

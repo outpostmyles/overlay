@@ -42,6 +42,7 @@ class SportAdapter:
     espn_scoreboard_params: tuple = ()    # extra ESPN scoreboard params, as (name, value) pairs
     max_lock_spread: float = 1.0          # a game whose Kalshi moneyline book is wider than this never locks
     kickoff_date_slack: int = 0           # days either side to find the game on ESPN (weekly sports only)
+    ledger_prop_quota: tuple = ()         # (stat, slots) pairs: per-type prop slots, filled by role, not by odds
 
 
 _REGISTRY: dict[str, SportAdapter] = {}

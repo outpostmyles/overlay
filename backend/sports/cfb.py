@@ -13,8 +13,9 @@ labels schools and a Power 4 team's opponent changes weekly. Against all 262 lab
 match ESPN's school name as-is, 51 more match once a trailing "St." reads "State", and the 13 left are
 mapped explicitly below (UT Rio Grande Valley has no ESPN entry yet).
 
-Tickers carry a bare date (KXNCAAFGAME-26OCT17NDBYU); a team plays once a week. No player props: Kalshi
-lists none at game level for college football.
+Tickers carry a bare date (KXNCAAFGAME-26OCT17NDBYU); a team plays once a week. Each game also locks its
+main spread line ("Western Kentucky wins by over 3.5 points", graded off the final margin). No player
+props: Kalshi lists none at game level for college football, and the owner can't bet them there anyway.
 """
 from __future__ import annotations
 
@@ -85,6 +86,7 @@ CFB = register(SportAdapter(
     espn_path="football/college-football",
     kalshi_series={
         "KXNCAAFGAME": ("moneyline", "Matches"),
+        "KXNCAAFSPREAD": ("spread", "Lines"),         # the owner bets the spread sometimes
         "KXNCAAFTOTAL": ("total", "Lines"),
     },
     kalshi_resolved_series="KXNCAAFGAME",

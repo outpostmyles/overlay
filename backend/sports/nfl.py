@@ -1,7 +1,7 @@
-"""NFL: moneylines plus player props, built on the MLB/NHL template.
+"""NFL: moneylines, spreads, and the player props the owner actually bets, on the MLB/NHL template.
 
 Anchor-only, like every sport since the WC ledger showed the market beats a model on calibration.
-Each game's de-vigged moneyline, main total, and its most competitive player props lock ~75 minutes
+Each game's de-vigged moneyline, main spread, main total, and a full prop sheet lock ~75 minutes
 before kickoff and grade off the free ESPN box score. Everything below was probed live first.
 
 Settlement (probed live): KXNFLGAME resolves on the official final; a tie settles at 50c each side.
@@ -17,7 +17,16 @@ actual stat, including zero. ESPN lists a player only in groups where he recorde
 anyone appearing anywhere in the box score counts as having played (see espn._football_lines).
 Anytime TD counts touchdowns a player SCORES, so a quarterback's TD passes are not his touchdowns.
 
-Not here yet: spreads (the next build, which also unlocks the NHL puck line).
+Props are the five the owner bets: passing yards, rushing yards, receiving yards, receptions, and anytime
+touchdown. Six more Kalshi series exist (attempts, completions, interceptions, rush+rec yards, passing
+TDs, rushing attempts) and were dropped on purpose: when the sheet took the 15 most competitive lines
+across all eleven, six of Thursday's fifteen went to stats nobody here bets, and touchdowns barely
+appeared because their odds sit far from a coin flip. Now each type gets fixed slots filled by role: the
+starting quarterbacks, the lead backs, the featured receivers, and the likeliest scorers.
+
+Spreads (probed live): one market per line per team, "DAL Cowboys wins by over 7.5 points", ticker
+...TBDAL-DAL8. Its no side is the opponent +7.5, so each line is a 2-way book. The covering team comes
+from the ticker code, since the label's team wording differs from college's.
 """
 from __future__ import annotations
 
@@ -72,17 +81,12 @@ NFL = register(SportAdapter(
     kalshi_series={
         "KXNFLGAME": ("moneyline", "Matches"),      # first: it teaches the ticker team codes
         "KXNFLTOTAL": ("total", "Lines"),
+        "KXNFLSPREAD": ("spread", "Lines"),
         # player props: per-line yes/no markets; the group slot carries the stat label the grader uses
         "KXNFLPASSYDS": ("player_prop", "passing yards"),
-        "KXNFLPASSTDS": ("player_prop", "passing touchdowns"),
-        "KXNFLPASSATT": ("player_prop", "passing attempts"),
-        "KXNFLPASSCOMP": ("player_prop", "passing completions"),
-        "KXNFLPASSINT": ("player_prop", "interceptions thrown"),
         "KXNFLRSHYDS": ("player_prop", "rushing yards"),
-        "KXNFLRSHATT": ("player_prop", "rushing attempts"),
         "KXNFLRECYDS": ("player_prop", "receiving yards"),
         "KXNFLREC": ("player_prop", "receptions"),
-        "KXNFLRRYDS": ("player_prop", "rushing and receiving yards"),
         "KXNFLTD": ("player_prop", "touchdowns"),
     },
     kalshi_resolved_series="KXNFLGAME",
@@ -98,5 +102,7 @@ NFL = register(SportAdapter(
     aliases=_ALIASES,
     results_window_days=10,            # a Thursday-to-Monday week plus slack
     pair_only_key=False,               # division rivals meet twice: key on pair + date
-    ledger_props=15,                   # a full prop sheet per game (one line per player and stat)
+    # per game: both starting QBs, the lead backs, the featured receivers, and the likeliest scorers
+    ledger_prop_quota=(("passing yards", 2), ("rushing yards", 4), ("receiving yards", 6),
+                       ("receptions", 6), ("touchdowns", 6)),
 ))

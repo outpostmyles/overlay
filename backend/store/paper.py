@@ -785,6 +785,14 @@ def _grade_legs(legs: list[dict], ga: int, gb: int, team_a: str, team_b: str, co
                 fa, fb = sum(ia[:5]), sum(ib[:5])
                 actual = team_a if fa > fb else team_b if fb > fa else "tie"
                 result = "won" if side == actual else "lost"
+        elif k == "spread":
+            cover = leg.get("team")
+            if cover in (team_a, team_b):
+                actual = (ga - gb) if cover == team_a else (gb - ga)   # the covering team's final margin
+                if actual == line:
+                    result = "push"                                  # cannot happen on a .5 line
+                else:
+                    result = "won" if (side == "cover") == (actual > line) else "lost"
         elif k == "player_prop":
             pl = (players or {}).get(leg.get("player_key") or "")
             if pl is not None:

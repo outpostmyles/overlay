@@ -97,7 +97,7 @@ def _in_scope(m) -> bool:
         return True
     teams = {s.key for s in m.selections}
     packed = (m.group or "").split("|")
-    if len(packed) == 3:
+    if len(packed) >= 3:                       # totals/props carry the pair; spreads add the covering team
         teams |= {packed[1], packed[2]}
     return bool(teams & keep)
 
@@ -364,6 +364,9 @@ async def _noop(value):
 _TOTAL_TITLE_RE = re.compile(r"^(.+?) vs (.+?) total (?:runs|goals|points)", re.IGNORECASE)
 
 
+# market types that get a de-vigged fair line. Every type the Kalshi parser can emit must be here: a type
+# left off is never priced, so it joins nothing, silently (spreads did exactly that on their first run).
+_PRICED_TYPES = ("moneyline", "total", "player_prop", "f5_moneyline", "spread")
 _no_kickoff_seen: set = set()
 _join_state: dict = {}
 
@@ -411,6 +414,28 @@ def _totals_by_game(markets: list) -> dict:
         except (ValueError, IndexError):
             continue
         out.setdefault((pair, (m.commence_time or "")[:16]), []).append((line, over.fair_prob))
+    return out
+
+
+def _spreads_by_game(markets: list) -> dict:
+    """{(team_pair, commence[:16]): [(cover_team, line, fair_cover)]} from per-line spread markets. Each one
+    reads "cover_team wins by more than line": its yes side is cover_team -line and its no side is the
+    opponent +line, so every line is its own 2-way book, de-vigged within itself and never across lines.
+    The pair and the covering team both come from the ticker (packed into `group` by the parser)."""
+    out: dict = {}
+    for m in markets:
+        if m.market_type != "spread":
+            continue
+        packed = (m.group or "").split("|")
+        over = next((s for s in m.selections if s.key.startswith("over_")), None)
+        if len(packed) != 4 or over is None or over.fair_prob is None:
+            continue
+        try:
+            line = float(over.key.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        out.setdefault((frozenset((packed[1], packed[2])), (m.commence_time or "")[:16]), []).append(
+            (packed[3], line, over.fair_prob))
     return out
 
 
@@ -584,7 +609,7 @@ def _predict_legs(model, corner_rates, a: str, b: str, poss: dict | None = None,
 
 def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: int,
                     now: datetime, corner_rates=None, poss=None, perf=None,
-                    totals=None, props=None, f5=None) -> tuple[list[dict], dict]:
+                    totals=None, props=None, f5=None, spreads=None) -> tuple[list[dict], dict]:
     """Build (candidates, board) for the Model Ledger from the de-vigged moneyline markets. A candidate is
     any upcoming 3-way game the model can price both teams of; the board carries the CURRENT model + market
     1X2 (frozen only when locked) plus the lock-window flags, computed here in UTC where the kickoff math
@@ -690,6 +715,14 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
             legs.append({"key": "total_goals", "side": "over" if fair_over >= 0.5 else "under",
                          "line": line, "team": None,
                          "prob": round(max(fair_over, 1 - fair_over), 3), "proj": None})
+        # the spread's MAIN line (the one nearest a coin flip, usually the favorite's): "cover" backs the
+        # covering team at -line, "not" backs the opponent at +line. Graded off the final margin.
+        game_spreads = (spreads or {}).get((frozenset((a, b)), (m.commence_time or "")[:16]))
+        if game_spreads:
+            cover, line, pc = min(game_spreads, key=lambda x: abs(x[2] - 0.5))
+            legs.append({"key": "spread", "team": cover, "opp": b if cover == a else a, "line": line,
+                         "side": "cover" if pc >= 0.5 else "not",
+                         "prob": round(max(pc, 1 - pc), 3), "proj": None})
         # first-5-innings call: the de-vigged 3-way's favorite locks and grades off the linescores.
         # Far-out F5 books sit at placeholder quotes (all legs equal, de-vig = exact thirds); only a
         # book with a real favorite is information worth locking.
@@ -705,10 +738,23 @@ def _forecast_board(markets: list[Market], model, kickoffs: dict, buffer_min: in
         main_line: dict = {}
         for pr in game_props:
             k = (pr["player_key"], pr["stat"])
-            if k not in main_line or abs(pr["fair"] - 0.5) < abs(main_line[k]["fair"] - 0.5):
+            if pr["stat"] == "touchdowns":          # "to score a touchdown" IS the 1+ line
+                if k not in main_line or pr["line"] == 0.5:
+                    main_line[k] = pr
+            elif k not in main_line or abs(pr["fair"] - 0.5) < abs(main_line[k]["fair"] - 0.5):
                 main_line[k] = pr
-        cap = sports.active().ledger_props
-        for pr in sorted(main_line.values(), key=lambda x: abs(x["fair"] - 0.5))[:cap]:
+        quota = sports.active().ledger_prop_quota
+        if quota:
+            # each prop type gets its own slots, filled by role: the biggest line (the featured receiver,
+            # the lead back, the starting QB) or, for touchdowns, the likeliest scorers
+            chosen = []
+            for stat, n in quota:
+                pool = [p for p in main_line.values() if p["stat"] == stat]
+                rank = (lambda p: p["fair"]) if stat == "touchdowns" else (lambda p: p["line"])
+                chosen += sorted(pool, key=rank, reverse=True)[:n]
+        else:
+            chosen = sorted(main_line.values(), key=lambda x: abs(x["fair"] - 0.5))[:sports.active().ledger_props]
+        for pr in chosen:
             legs.append({"key": "player_prop", "stat": pr["stat"], "player": pr["player"],
                          "player_key": pr["player_key"], "line": pr["line"], "team": None,
                          "side": "over" if pr["fair"] >= 0.5 else "under",
@@ -1684,7 +1730,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     # are no standalone +EV / Best Lines / Arbitrage tabs anymore. Futures are never surfaced.
     best = []
     for m in markets:
-        if m.market_type not in ("moneyline", "total", "player_prop", "f5_moneyline"):
+        if m.market_type not in _PRICED_TYPES:
             continue
         edges.consensus_fair_line(m, config.SHARP_SOURCES, config.DEVIG_METHOD)
         if m.market_type == "moneyline":
@@ -1757,13 +1803,13 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                  for d in fdates for k in range(-slack, slack + 1)})
             fkicks = await get_kickoffs(fdates)
             joins = {"total": _totals_by_game(markets), "player_prop": _props_by_game(markets),
-                     "f5_moneyline": _f5_by_game(markets)}
+                     "f5_moneyline": _f5_by_game(markets), "spread": _spreads_by_game(markets)}
             _warn_silent_joins(markets, joins)
             fcands, fboard = _forecast_board(markets, model, fkicks,
                                              config.FORECAST_LOCK_BUFFER_MINUTES, now_utc,
                                              corner_rates, poss_shares, perf_mult,
                                              totals=joins["total"], props=joins["player_prop"],
-                                             f5=joins["f5_moneyline"])
+                                             f5=joins["f5_moneyline"], spreads=joins["spread"])
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line

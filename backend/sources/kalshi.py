@@ -74,7 +74,7 @@ async def _fetch_series(client: httpx.AsyncClient, series: str, status: str = "o
 
 # market types parsed one-market-PER-LINE: each child (e.g. "Over 8.5 runs", "Judge: 2+ HR") is its own
 # 2-way yes/no book. De-vig happens within that pair only; lines of one event are NOT mutually exclusive.
-_PER_LINE_TYPES = ("total", "player_prop")
+_PER_LINE_TYPES = ("total", "player_prop", "spread")
 
 
 def _prop_pair(event_ticker: str, code_map: dict) -> tuple | None:
@@ -114,10 +114,18 @@ def _per_line_market(m: dict, series: str, mtype: str, group: str, code_map: dic
                      volume=m.get("volume_fp"), link=f"https://kalshi.com/markets/{series.lower()}")
 
     ev_ticker = m.get("event_ticker") or tkr.rsplit("-", 1)[0]
-    if mtype in ("player_prop", "total"):     # pack the game pair from the ticker so the leg can join
+    if mtype in ("player_prop", "total", "spread"):   # pack the game pair from the ticker so the leg can join
         pair = _prop_pair(ev_ticker, code_map)
         if pair:
             group = f"{group}|{pair[0]}|{pair[1]}"
+    if mtype == "spread":
+        # "DAL Cowboys wins by over 7.5 points" is ticker ...TBDAL-DAL8: the suffix's letters are the
+        # covering team's code. The label's wording differs by sport ("DAL Cowboys" vs "Western Kentucky"),
+        # the code does not. A spread that cannot name its game and its team cannot be graded: drop it.
+        cover = code_map.get(re.sub(r"\d+$", "", tkr.rsplit("-", 1)[-1]))
+        if not pair or not cover or cover not in pair:
+            return None
+        group = f"{group}|{cover}"
     return Market(
         market_id=f"kalshi:{tkr}",
         event=_clean(m.get("title") or "").rstrip("?").strip(),

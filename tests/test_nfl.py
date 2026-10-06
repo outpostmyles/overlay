@@ -46,8 +46,12 @@ def test_nfl_adapter_registered():
     a = sports.get("nfl")
     assert a.outcomes == ("a", "b") and a.espn_path == "football/nfl"
     assert list(a.kalshi_series)[0] == "KXNFLGAME"           # first, so it teaches the ticker codes
-    assert a.kalshi_series["KXNFLTD"] == ("player_prop", "touchdowns")
-    assert a.ledger_props == 15 and a.capabilities == frozenset() and a.pair_only_key is False
+    props = {v[1] for v in a.kalshi_series.values() if v[0] == "player_prop"}
+    assert props == {"passing yards", "rushing yards", "receiving yards", "receptions", "touchdowns"}
+    assert a.kalshi_series["KXNFLSPREAD"] == ("spread", "Lines")
+    assert dict(a.ledger_prop_quota) == {"passing yards": 2, "rushing yards": 4, "receiving yards": 6,
+                                          "receptions": 6, "touchdowns": 6}
+    assert a.capabilities == frozenset() and a.pair_only_key is False
 
 
 def test_every_kalshi_label_lands_on_its_espn_team(monkeypatch):
@@ -103,24 +107,45 @@ def _ml(a_key, b_key, date, pa, pb):
                   selections=[sel(a_key, pa), sel(b_key, pb)], commence_time=date)
 
 
-def test_prop_legs_take_one_line_per_player_and_stat(monkeypatch):
-    """A receiving-yards ladder is one bet several times: only the rung nearest 50% may lock, and the
-    sheet stops at the sport's cap."""
-    monkeypatch.setattr(config, "SPORT", "nfl")
+def _board_props(props, spreads=None):
     dal, tb = "dallas cowboys", "tampa bay buccaneers"
     pair = frozenset((dal, tb))
-    ladder = [{"stat": "receiving yards", "player": "CeeDee Lamb", "player_key": "ceedee lamb",
-               "line": ln, "fair": f} for ln, f in ((49.5, 0.81), (64.5, 0.62), (79.5, 0.47), (99.5, 0.28))]
-    others = [{"stat": "receptions", "player": f"P{i}", "player_key": f"p{i}", "line": 3.5,
-               "fair": 0.30 + i * 0.01} for i in range(20)]
     board = aggregator._forecast_board(
         [_ml(dal, tb, "2026-10-08", 0.80, 0.20)], None, {(pair, "2026-10-08"): "2026-10-09T00:15Z"}, 75,
-        datetime(2026, 10, 8, 12, tzinfo=timezone.utc), props={(pair, "2026-10-08"): ladder + others})[1]
-    legs = [l for l in next(iter(board.values()))["legs"] if l["key"] == "player_prop"]
+        datetime(2026, 10, 8, 12, tzinfo=timezone.utc), props={(pair, "2026-10-08"): props},
+        spreads={(pair, "2026-10-08"): spreads} if spreads else None)[1]
+    return next(iter(board.values()))["legs"]
+
+
+def _p(player, stat, line, fair):
+    return {"stat": stat, "player": player, "player_key": player.lower(), "line": line, "fair": fair}
+
+
+def test_prop_sheet_one_line_per_player_and_slots_by_type(monkeypatch):
+    """A receiving-yards ladder is one bet several times: only the rung nearest 50% may lock. Each prop
+    type then fills its own slots by role (biggest line first), so receptions cannot crowd out yards."""
+    monkeypatch.setattr(config, "SPORT", "nfl")
+    ladder = [_p("CeeDee Lamb", "receiving yards", ln, f)
+              for ln, f in ((49.5, 0.81), (64.5, 0.62), (79.5, 0.47), (99.5, 0.28))]
+    others = [_p(f"WR{i}", "receiving yards", 10.5 + i * 5, 0.5) for i in range(9)]
+    recs = [_p(f"RB{i}", "receptions", 1.5 + i, 0.5) for i in range(9)]
+    legs = [l for l in _board_props(ladder + others + recs) if l["key"] == "player_prop"]
     lamb = [l for l in legs if l["player_key"] == "ceedee lamb"]
     assert len(lamb) == 1 and lamb[0]["line"] == 79.5            # the 47% rung, not 62% or 81%
-    assert len(legs) == 15                                       # the NFL cap
-    assert len({(l["player_key"], l["stat"]) for l in legs}) == 15
+    yds = [l for l in legs if l["stat"] == "receiving yards"]
+    assert len(yds) == 6 and yds[0]["line"] == 79.5              # 6 slots, biggest role first
+    rec = [l for l in legs if l["stat"] == "receptions"]
+    assert len(rec) == 6 and [l["line"] for l in rec] == [9.5, 8.5, 7.5, 6.5, 5.5, 4.5]
+
+
+def test_anytime_td_is_the_1plus_line_and_the_likeliest_scorers(monkeypatch):
+    monkeypatch.setattr(config, "SPORT", "nfl")
+    tds = [_p("Star Back", "touchdowns", 0.5, 0.74), _p("Star Back", "touchdowns", 1.5, 0.36)]  # 2+ nearer 50%
+    tds += [_p(f"Scorer{i}", "touchdowns", 0.5, 0.10 + i * 0.05) for i in range(8)]
+    legs = [l for l in _board_props(tds) if l["stat"] == "touchdowns"]
+    star = [l for l in legs if l["player_key"] == "star back"]
+    assert len(star) == 1 and star[0]["line"] == 0.5 and star[0]["side"] == "over"
+    assert len(legs) == 6 and legs[0]["player_key"] == "star back"   # likeliest scorers fill the slots
 
 
 def _group(name, keys, rows):
@@ -169,4 +194,43 @@ def test_prop_grading_zero_is_a_loss_and_absence_is_a_void(monkeypatch):
              "player_key": "daniel jones", "line": 0.5, "side": "over", "prob": 0.2}]
     out = paper._grade_legs(legs, 30, 20, "x", "y", None, players=players)
     assert [l["result"] for l in out] == ["lost", "void", "won"]
+    os.unlink(config.DB_PATH)
+
+
+def test_spread_payload_names_its_covering_team_from_the_ticker(monkeypatch):
+    """Exact live shapes: "DAL Cowboys wins by over 7.5 points" is ...TBDAL-DAL8. The code, not the
+    label, names the team (college labels read "Western Kentucky" instead)."""
+    monkeypatch.setattr(config, "SPORT", "nfl")
+    ev = "KXNFLSPREAD-26OCT08TBDAL"
+    raw = {
+        "KXNFLGAME": [_m("KXNFLGAME-26OCT08TBDAL-DAL", "Dallas wins", "Dallas", "0.8000", "0.8100"),
+                      _m("KXNFLGAME-26OCT08TBDAL-TB", "Tampa Bay wins", "Tampa Bay", "0.1900", "0.2000")],
+        "KXNFLSPREAD": [_m(f"{ev}-DAL8", "DAL Cowboys wins by over 7.5 points?",
+                           "DAL Cowboys wins by over 7.5 points", "0.5100", "0.5200", 7.5, ev),
+                        _m(f"{ev}-TB2", "TB Buccaneers wins by over 1.5 points?",
+                           "TB Buccaneers wins by over 1.5 points", "0.1700", "0.1800", 1.5, ev),
+                        _m(f"{ev}-XX9", "?", "?", "0.5000", "0.5100", 8.5, ev)],   # unknown code: dropped
+    }
+
+    async def fake_series(client, series, status="open"):
+        return raw.get(series, [])
+
+    monkeypatch.setattr(kalshi, "_fetch_series", fake_series)
+    sp = [m for m in asyncio.run(kalshi.fetch(None)) if m.market_type == "spread"]
+    assert sorted(m.group for m in sp) == ["Lines|tampa bay buccaneers|dallas cowboys|dallas cowboys",
+                                           "Lines|tampa bay buccaneers|dallas cowboys|tampa bay buccaneers"]
+
+
+def test_spread_leg_takes_the_main_line_and_grades_off_the_margin(monkeypatch):
+    monkeypatch.setattr(config, "SPORT", "nfl")
+    dal, tb = "dallas cowboys", "tampa bay buccaneers"
+    lines = [(dal, 3.5, 0.68), (dal, 7.5, 0.515), (dal, 10.5, 0.42), (tb, 1.5, 0.175)]
+    leg = next(l for l in _board_props([], spreads=lines) if l["key"] == "spread")
+    assert (leg["team"], leg["opp"], leg["line"], leg["side"]) == (dal, tb, 7.5, "cover")
+    paper = _fresh_paper()
+    g = lambda ga, gb, side: paper._grade_legs([{**leg, "side": side}], ga, gb, dal, tb, None)[0]
+    assert g(31, 20, "cover")["result"] == "won" and g(31, 20, "cover")["actual"] == 11
+    assert g(24, 20, "cover")["result"] == "lost"                # won by 4: Tampa Bay +7.5 covers
+    assert g(24, 20, "not")["result"] == "won"
+    assert g(17, 20, "cover")["actual"] == -3                     # an outright loss is a negative margin
     os.unlink(config.DB_PATH)

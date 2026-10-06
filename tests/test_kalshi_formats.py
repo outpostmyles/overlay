@@ -109,3 +109,11 @@ def test_silent_join_watchdog_logs_breaks_once_and_recovery(monkeypatch, capsys)
     assert "total joins recovered: 1 game(s)" in out
     aggregator._warn_silent_joins([], {"total": {}})                # nothing listed: never a warning
     assert "WARNING" not in capsys.readouterr().out
+
+
+def test_every_parsed_market_type_gets_a_fair_price():
+    """A type the parser emits but the de-vig step skips has no fair price, so it joins no game, and
+    nothing errors. Spreads shipped that way for one smoke-test run before the watchdog caught it."""
+    from backend import aggregator
+    emitted = set(kalshi._PER_LINE_TYPES) | {"moneyline", "f5_moneyline"}
+    assert emitted <= set(aggregator._PRICED_TYPES), emitted - set(aggregator._PRICED_TYPES)
