@@ -112,6 +112,11 @@ PERF_RATIO_HI = 1.6
 # credits or Anthropic tokens, and it is gentler than the 60s browser poll. Off by default; set
 # HEARTBEAT_ENABLED=true in .env on the deployed host. See DEPLOY.md.
 HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+# One site: nginx serves every board under one address (/nfl/, /cfb/, ...; deploy/setup-nginx.sh) and tags
+# each proxied request with X-Forwarded-Prefix. With this on, a page load that reaches a board's own port
+# directly (an old bookmark) is sent to the board's address on the site instead. Leave it off locally.
+ONE_SITE = os.getenv("OVERLAY_ONE_SITE", "").strip().lower() in ("1", "true", "yes", "on")
 HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "300") or 300)
 
 # --- AI reasoning (manual-trigger, disk-cached — never on the auto-refresh) ---

@@ -76,6 +76,8 @@ def _polymarket_classify(slug: str) -> None:
 NFL = register(SportAdapter(
     key="nfl",
     display_name="NFL",
+    site_path="nfl",
+    code="NFL",
     outcomes=("a", "b"),
     espn_path="football/nfl",
     kalshi_series={

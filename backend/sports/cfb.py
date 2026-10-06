@@ -82,6 +82,8 @@ def _polymarket_classify(slug: str) -> None:
 CFB = register(SportAdapter(
     key="cfb",
     display_name="College Football",
+    site_path="cfb",
+    code="CFB",
     outcomes=("a", "b"),
     espn_path="football/college-football",
     kalshi_series={

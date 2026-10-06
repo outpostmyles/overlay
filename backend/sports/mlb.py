@@ -63,6 +63,8 @@ def _polymarket_classify(slug: str) -> None:
 MLB = register(SportAdapter(
     key="mlb",
     display_name="MLB",
+    site_path="mlb",
+    code="MLB",
     outcomes=("a", "b"),               # no draws: extra innings settle every game
     espn_path="baseball/mlb",
     kalshi_series={

@@ -62,6 +62,24 @@ def read_all() -> dict:
     return out
 
 
+def upcoming(boards: dict, now: float | None = None) -> dict:
+    """{sport: games not yet started} for every board that has published lately: the switcher's counts,
+    and how the site's front door picks a board."""
+    from datetime import datetime, timezone
+    now_dt = datetime.fromtimestamp(now if now is not None else time.time(), timezone.utc)
+    out = {}
+    for sport, b in boards.items():
+        n = 0
+        for g in b.get("games") or []:
+            try:
+                ko = datetime.fromisoformat((g.get("kickoff_iso") or "").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            n += ko > now_dt
+        out[sport] = n
+    return out
+
+
 def games_by_dedup(boards: dict) -> dict:
     """Every published game, keyed the way bets reference them."""
     return {g["dedup"]: g for b in boards.values() for g in b.get("games") or []}

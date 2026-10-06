@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import aggregator, config, futures_read, propread, sports
@@ -176,8 +176,25 @@ async def remove_mybet(bet_id: int) -> dict:
 
 
 # --- Frontend ------------------------------------------------------------- #
+_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+
+@app.get("/go")
+async def front_door() -> RedirectResponse:
+    """The site's front door (nginx sends / here): the first board, in order, with games coming up."""
+    board = sports.pick_board(livelegs.upcoming(livelegs.read_all()))
+    return RedirectResponse(f"/{board.site_path}/", status_code=302)
+
+
 @app.get("/")
-async def index() -> FileResponse:
+async def index(request: Request):
+    adapter = sports.active()
+    host = request.url.hostname or ""
+    if config.ONE_SITE and adapter.site_path and "x-forwarded-prefix" not in request.headers \
+            and host not in _LOOPBACK:
+        # reached on the board's own port (an old bookmark): send it to the board's address on the site.
+        # Loopback stays put: an SSH tunnel or a curl on the server has no site at that host's port 80.
+        return RedirectResponse(f"http://{host}/{adapter.site_path}/", status_code=302)
     return FileResponse(config.FRONTEND_DIR / "index.html")
 
 

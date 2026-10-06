@@ -1931,6 +1931,17 @@ async def futures_scenario(pins: list[dict]) -> dict:
 # --------------------------------------------------------------------------- #
 # Build the snapshot served to the dashboard
 # --------------------------------------------------------------------------- #
+def _boards_meta() -> list[dict]:
+    """Every board on the site, for the switcher: its address, label, and games coming up (from the boards'
+    shared live files, so a board that is not running shows none)."""
+    try:
+        counts = livelegs.upcoming(livelegs.read_all())
+    except Exception:  # noqa: BLE001  (the switcher never costs the board a snapshot)
+        counts = {}
+    return [{"sport": b.key, "name": b.display_name, "code": b.code, "path": b.site_path,
+             "upcoming": counts.get(b.key)} for b in sports.boards()]
+
+
 async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                          reason: bool = False) -> dict:
     caps = sports.active().capabilities        # adapter capability flags gate the sport-specific stacks
@@ -2192,6 +2203,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
         "meta": {
             "sport": sports.active().key,
             "sport_name": sports.active().display_name,
+            "boards": _boards_meta(),
             "capabilities": sorted(caps),
             "model_loaded": model is not None,
             "sources_live": sources_live,

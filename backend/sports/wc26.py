@@ -30,6 +30,8 @@ def _polymarket_classify(slug: str) -> str | None:
 WC26 = register(SportAdapter(
     key="wc26",
     display_name="World Cup 2026",
+    site_path="wc",
+    code="WC",
     outcomes=("a", "draw", "b"),
     espn_path="soccer/fifa.world",
     kalshi_series={

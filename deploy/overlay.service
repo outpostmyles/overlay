@@ -19,7 +19,8 @@ Environment=HEARTBEAT_ENABLED=false
 ExecStart=/opt/overlay/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
-# Keep it bound to localhost (above). Reach it over an SSH tunnel or put nginx in front (see DEPLOY.md).
+# Keep it bound to localhost (above). nginx serves it on the site at /wc/ (deploy/setup-nginx.sh); an
+# SSH tunnel to it still works (loopback is never redirected), see DEPLOY.md.
 
 [Install]
 WantedBy=multi-user.target

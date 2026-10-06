@@ -104,10 +104,17 @@ def test_a_cross_sport_ticket_logs_as_multi_and_shows_on_every_board(monkeypatch
     assert bet["sport"] == "multi" and {l["sport"] for l in bet["legs"]} == {"nfl", "cfb"}
     monkeypatch.setattr(config, "SPORT", "cfb")
     assert [b["id"] for b in mybets.list_bets()] == [bet["id"]]           # the college board sees it too
+    # a full-length lotto ticket loaded into the Bet Slip logs too (20 legs, the lotto's own limit)
+    many = {f"x{i}": {"dedup": f"x{i}", "team_a": f"a{i}", "team_b": f"b{i}", "date": "2026-10-10",
+                      "market": (0.7, 0.0, 0.3), "sport": "cfb"} for i in range(lotto.MAX_LEGS)}
+    big = mybets.log_bet({"legs": [{"dedup": k, "kind": "ml", "team": g["team_a"]} for k, g in many.items()],
+                          "price": 20000, "stake": 5}, many)
+    assert len(big["legs"]) == lotto.MAX_LEGS and mybets.MAX_LEGS >= lotto.MAX_LEGS
     single = mybets.log_bet({"legs": [{"dedup": "g1", "kind": "ml", "team": "kansas city chiefs"}],
                              "price": -400, "stake": 3}, games)
     assert single["sport"] == "nfl"
-    assert [b["id"] for b in mybets.list_bets()] == [bet["id"]]           # an NFL-only bet stays on the NFL board
+    # an NFL-only bet stays on the NFL board (the college board sees the cross-sport and college tickets)
+    assert {b["id"] for b in mybets.list_bets()} == {bet["id"], big["id"]}
 
 
 # --- payout-target tickets ------------------------------------------------------------------------- #

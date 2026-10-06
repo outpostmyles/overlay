@@ -71,6 +71,8 @@ def _polymarket_classify(slug: str) -> None:
 NHL = register(SportAdapter(
     key="nhl",
     display_name="NHL",
+    site_path="nhl",
+    code="NHL",
     outcomes=("a", "b"),               # no draws: overtime and the shootout settle every game
     espn_path="hockey/nhl",
     kalshi_series={

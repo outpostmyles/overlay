@@ -45,6 +45,8 @@ class SportAdapter:
     ledger_prop_quota: tuple = ()         # (stat, slots) pairs: per-type prop slots, filled by role, not by odds
     research: str = ""                    # research layer profile ("football"): a graded Research % beside the line
     polymarket_series: str = ""           # Polymarket's sports series id for this league's games (top bettors tab)
+    site_path: str = ""                   # the board's address on the one site: /<site_path>/ (nginx routes it)
+    code: str = ""                        # short label for the board switcher ("NFL", "CFB")
 
 
 _REGISTRY: dict[str, SportAdapter] = {}
@@ -61,6 +63,24 @@ def get(key: str) -> SportAdapter:
 
 def keys() -> tuple:
     return tuple(_REGISTRY)
+
+
+# The boards in the order the site lists them: the football season first, the finished World Cup last.
+BOARD_ORDER = ("nfl", "cfb", "nhl", "mlb", "wc26")
+
+
+def boards() -> list[SportAdapter]:
+    """Every board with an address on the site, in BOARD_ORDER (any other registered sport after)."""
+    ordered = [k for k in BOARD_ORDER if k in _REGISTRY] + [k for k in _REGISTRY if k not in BOARD_ORDER]
+    return [_REGISTRY[k] for k in ordered if _REGISTRY[k].site_path]
+
+
+def pick_board(upcoming: dict) -> SportAdapter:
+    """Where the site's front door sends you: the first board, in order, with games coming up (`upcoming`
+    maps a sport to its count of upcoming games), else the first board. In the fall that is the NFL; in
+    the summer, when football is dark, MLB."""
+    listed = boards()
+    return next((b for b in listed if upcoming.get(b.key)), listed[0])
 
 
 def active() -> SportAdapter:

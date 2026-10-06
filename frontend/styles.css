@@ -116,6 +116,19 @@ button { font-family: var(--font-ui); }
   border-right: 1px solid var(--border); padding: 16px 13px;
   display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
 }
+/* the board switcher: every sport on one site */
+.boards[hidden] { display: none; }
+.rail > * { flex-shrink: 0; }          /* a short screen scrolls the rail instead of squeezing the tabs */
+.board-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 0 2px; }
+.board {
+  display: flex; align-items: center; justify-content: center; height: 30px; border-radius: 8px;
+  font: 700 10.5px var(--font-mono); letter-spacing: .04em; color: var(--muted); text-decoration: none;
+  background: var(--surface); border: 1px solid var(--border); transition: background .15s, color .15s, border-color .15s;
+}
+.board:hover { color: var(--text); border-color: var(--border-bright); }
+.board.quiet { opacity: .55; }
+.board.active { color: #fff; opacity: 1; background: linear-gradient(180deg, rgba(139,123,255,.30), rgba(139,123,255,.12)); border-color: rgba(139,123,255,.55); box-shadow: 0 0 10px var(--glow); }
+.board-name { font: 600 12px var(--font-ui); color: var(--text); padding: 8px 4px 0; }
 .nav-group { font: 600 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .14em; color: var(--muted); opacity: .7; padding: 16px 10px 6px; }
 .nav-group:first-child { padding-top: 4px; }
 .tab {
@@ -565,6 +578,11 @@ td .rchip { margin-left: 4px; }
   .rail-foot .odds-btn .label { display: none; }
   main { padding: 22px 16px 60px; }
   .brand .subtitle, .brand-div { display: none; }
+  .board-row { grid-template-columns: 1fr; padding: 0; gap: 3px; }
+  .boards .nav-group { display: none; }
+  .boards { padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+  .board { height: 28px; font-size: 9.5px; }
+  .board-name { display: none; }
 }
 /* phones: stop the card grids overflowing — single column */
 @media (max-width: 600px) {

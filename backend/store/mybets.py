@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS my_bets (
 );
 """
 KINDS = ("ml", "spread", "total")
-MAX_LEGS = 12
+MAX_LEGS = 20                          # a weekend lotto ticket runs up to 20 legs (lotto.MAX_LEGS)
 
 
 def _conn() -> sqlite3.Connection:

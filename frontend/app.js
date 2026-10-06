@@ -36,14 +36,14 @@ async function loadSnapshot(force = false, refreshOdds = false, reason = false) 
     if (force) qs.push("force=true");
     if (refreshOdds) qs.push("refresh_odds=true");
     if (reason) qs.push("reason=true");
-    state.snapshot = await getJSON("/api/snapshot" + (qs.length ? "?" + qs.join("&") : ""));
+    state.snapshot = await getJSON("api/snapshot" + (qs.length ? "?" + qs.join("&") : ""));
     renderAll();
   } catch (e) {
     $("#meta-updated").textContent = "error: " + e.message.slice(0, 80);
   }
 }
 async function loadPaper() {
-  state.paper = await getJSON("/api/paper");
+  state.paper = await getJSON("api/paper");
   renderPaper();
 }
 
@@ -87,6 +87,7 @@ function renderAll() {
     const fut = document.querySelector('[data-tab="futures"]');
     if (fut) fut.style.display = caps.includes("futures") ? "" : "none";
   }
+  renderBoards(s.meta);
   // the header names the active sport (the app is multi-sport now)
   if (s.meta && s.meta.sport_name) {
     const badge = document.getElementById("sport-badge");
@@ -806,7 +807,7 @@ function renderSlip(force) {
   box.innerHTML = _valueNowHTML(p.value_now) + _parlayHTML(slip, p.slip_games) + _myBetsHTML(state.mybets);
 }
 async function loadMyBets() {
-  try { state.mybets = await getJSON("/api/mybets"); } catch (e) { state.mybets = { bets: [], summary: {} }; }
+  try { state.mybets = await getJSON("api/mybets"); } catch (e) { state.mybets = { bets: [], summary: {} }; }
   if (state.tab === "slip") renderSlip(true);
 }
 document.addEventListener("click", async (e) => {
@@ -832,7 +833,7 @@ document.addEventListener("click", async (e) => {
     const body = { legs: slip.legs.map((l) => ({ dedup: l.dedup, kind: l.kind, team: l.team, dir: l.dir, line: l.line })),
                    price: parseInt(slip.price, 10), stake: parseFloat(slip.stake), book: slip.book };
     try {
-      await getJSON("/api/mybets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      await getJSON("api/mybets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       slip.legs = []; slip.price = ""; _slipSave();
       await loadMyBets(); renderSlip(true);
     } catch (err) {
@@ -843,7 +844,7 @@ document.addEventListener("click", async (e) => {
   }
   const del = e.target.closest("[data-bet-rm]");
   if (del && confirm("Delete this bet from your record?")) {
-    await getJSON("/api/mybets/" + del.getAttribute("data-bet-rm"), { method: "DELETE" });
+    await getJSON("api/mybets/" + del.getAttribute("data-bet-rm"), { method: "DELETE" });
     await loadMyBets();
   }
 });
@@ -1323,15 +1324,15 @@ function renderPaper() {
     : `<div class="empty">no ${tab} picks</div>`;
   body.innerHTML = `<div class="pick-section"><h3>Pick ledger</h3>${chips}${hint}${stream}</div>`;
   body.querySelectorAll("[data-pstatus]").forEach((sel) => sel.onchange = async () => {
-    await getJSON("/api/paper/" + sel.dataset.pstatus, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: sel.value }) });
+    await getJSON("api/paper/" + sel.dataset.pstatus, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: sel.value }) });
     loadPaper();
   });
   body.querySelectorAll("[data-pmoney]").forEach((cb) => cb.onchange = async () => {
-    await getJSON("/api/paper/" + cb.dataset.pmoney, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ real_money: cb.checked ? 1 : 0 }) });
+    await getJSON("api/paper/" + cb.dataset.pmoney, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ real_money: cb.checked ? 1 : 0 }) });
     loadPaper();
   });
   body.querySelectorAll("[data-pdel]").forEach((b) => b.onclick = async () => {
-    await getJSON("/api/paper/" + b.dataset.pdel, { method: "DELETE" });
+    await getJSON("api/paper/" + b.dataset.pdel, { method: "DELETE" });
     loadPaper();
   });
 }
@@ -1372,8 +1373,26 @@ function trackCard(p) {
 }
 
 // ---------- tabs / events ----------
+// ---------- the board switcher: every sport on one site (/nfl/, /cfb/, ...), from the snapshot's board list ----------
+function renderBoards(meta) {
+  const box = document.getElementById("boards");
+  const list = (meta && meta.boards) || [];
+  const here = list.find((b) => b.sport === meta.sport);
+  // only on the one site: a board served on its own (local development) has no siblings at /<path>/
+  if (!box || !here || !location.pathname.startsWith("/" + here.path + "/")) { if (box) box.hidden = true; return; }
+  const tab = state.tab && state.tab !== "picks" ? "#" + state.tab : "";
+  box.hidden = false;
+  box.innerHTML = `<div class="nav-group">Sport</div><div class="board-row">${list.map((b) => {
+    const n = b.upcoming;
+    const title = `${b.name}${n ? ` · ${n} game${n === 1 ? "" : "s"} coming up` : n === 0 ? " · no games coming up" : ""}`;
+    return `<a class="board${b.sport === meta.sport ? " active" : ""}${n ? "" : " quiet"}" href="/${esc(b.path)}/${b.sport === meta.sport ? "" : tab}" title="${esc(title)}" aria-label="${esc(title)}">${esc(b.code)}</a>`;
+  }).join("")}</div><div class="board-name">${esc(here.name)}</div><div class="nav-group">Board</div>`;
+}
+
 function switchTab(name) {
   state.tab = name;
+  try { history.replaceState(null, "", name === "picks" ? location.pathname + location.search : "#" + name); } catch (e) { /* file:// or sandboxed */ }
+  if (state.snapshot) renderBoards(state.snapshot.meta);
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
   if (name === "track") loadPaper();
@@ -1402,7 +1421,7 @@ document.addEventListener("click", async (e) => {
   if (!payload) return;
   btn.textContent = "…"; btn.disabled = true;
   try {
-    const r = await getJSON("/api/propread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const r = await getJSON("api/propread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const cls = r.lean === "over" ? "read-over" : (r.lean === "under" || r.lean === "avoid") ? "read-avoid" : "read-neutral";
     const conf = r.confidence ? ` ${r.confidence}/5` : "";
     const det = el(`<tr class="detail"><td colspan="7"><span class="readlean ${cls}">AI: ${esc(r.lean)}${conf}</span> <span class="muted">${esc(r.why || "")}</span>${r.source === "haiku" && !r.cached ? ' <span class="src pm">live</span>' : ""}</td></tr>`);
@@ -1422,7 +1441,7 @@ document.addEventListener("click", async (e) => {
       market_pct: parseFloat(rd.dataset.mk), model_pct: parseFloat(rd.dataset.md),
       record: rd.dataset.rec, notes: scoutNotes() };
     try {
-      const r = await getJSON("/api/futuresread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const r = await getJSON("api/futuresread", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const cls = r.lean === "back" ? "read-over" : r.lean === "fade" ? "read-avoid" : "read-neutral";
       const conf = r.confidence ? ` ${r.confidence}/5` : "";
       const det = el(`<tr class="detail"><td colspan="5"><span class="readlean ${cls}">AI: ${esc(r.lean)}${conf}</span> <span class="muted">${esc(r.why || "")}</span>${r.source === "haiku" && !r.cached ? ' <span class="src pm">live</span>' : ""}</td></tr>`);
@@ -1436,7 +1455,7 @@ document.addEventListener("click", async (e) => {
     if (note === null) return;   // cancelled
     ln.disabled = true;
     try {
-      await getJSON("/api/futures/lean", { method: "POST", headers: { "Content-Type": "application/json" },
+      await getJSON("api/futures/lean", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ team: ln.dataset.team, kind: ln.dataset.kind, direction: ln.dataset.dir, entry_pct: parseFloat(ln.dataset.pct), note: note.trim() }) });
       await loadSnapshot();
     } catch (err) { ln.disabled = false; }
@@ -1445,7 +1464,7 @@ document.addEventListener("click", async (e) => {
   const rm = e.target.closest("[data-lean-rm]");
   if (rm) {
     rm.disabled = true;
-    try { await getJSON("/api/futures/lean/" + encodeURIComponent(rm.dataset.leanRm), { method: "DELETE" }); await loadSnapshot(); }
+    try { await getJSON("api/futures/lean/" + encodeURIComponent(rm.dataset.leanRm), { method: "DELETE" }); await loadSnapshot(); }
     catch (err) { rm.disabled = false; }
     return;
   }
@@ -1472,7 +1491,7 @@ function _loadPins() {
 }
 async function _refreshScenario() {
   try {
-    const r = await getJSON("/api/futures/scenario", { method: "POST", headers: { "Content-Type": "application/json" },
+    const r = await getJSON("api/futures/scenario", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pins: state.scenario.pins }) });
     state.scenario.deltas = r.deltas || [];
     state.scenario.pins = (r.pins && r.pins.length) ? r.pins : state.scenario.pins;   // backend drops pins it can't apply
@@ -1521,7 +1540,17 @@ document.addEventListener("click", (e) => {
 
 // ---------- boot ----------
 const _hadPins = _loadPins();   // restore scenario pins from a prior visit (deltas recompute fresh)
-loadSnapshot().then(() => { if (_hadPins && state.scenario.pins.length) _refreshScenario(); });
+// a board address can carry its tab (/cfb/#lotto), so switching sports keeps you on the same tab
+function _openHashTab() {
+  let name = "";
+  try { name = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { return; }   // a mangled link
+  const btn = name && document.querySelector(`.tab[data-tab="${CSS.escape(name)}"]`);
+  if (btn && btn.style.display !== "none") switchTab(name);
+}
+// scenario pins belong to the World Cup bracket; every board shares one origin now, so only a board with
+// futures refreshes them (the others would run a soccer bracket sim for a hidden tab)
+const _hasFutures = () => (((state.snapshot || {}).meta || {}).capabilities || []).includes("futures");
+loadSnapshot().then(() => { _openHashTab(); if (_hadPins && state.scenario.pins.length && _hasFutures()) _refreshScenario(); });
 // auto-refresh, but never yank the UI out from under an open read: skip the cycle while the user has
 // a situational brief or a per-prop Read row expanded (they'll get fresh data on the next tick).
 setInterval(() => {

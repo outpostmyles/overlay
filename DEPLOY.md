@@ -74,13 +74,13 @@ journalctl -u overlay -f      # look for "[heartbeat] enabled..." then periodic 
 Each sport is its own process: the same code and the same `poly.db` (ledger rows are tagged by sport),
 selected by a `SPORT` environment variable and bound to its own port. The unit files ship in `deploy/`:
 
-| Unit | Sport | Port |
-|---|---|---|
-| `overlay` | World Cup 2026 (finished, kept as an archive; heartbeat off) | 8000, behind nginx on 80 |
-| `overlay-mlb` | MLB | 8001 |
-| `overlay-nhl` | NHL (from 2026-10-06) | 8002 |
-| `overlay-nfl` | NFL (from 2026-10-06) | 8003 |
-| `overlay-cfb` | College football, Power 4 + Notre Dame only (from 2026-10-06) | 8004 |
+| Unit | Sport | Port | Address on the site |
+|---|---|---|---|
+| `overlay` | World Cup 2026 (finished, kept as an archive; heartbeat off) | 8000 (local only) | `/wc/` |
+| `overlay-mlb` | MLB | 8001 | `/mlb/` |
+| `overlay-nhl` | NHL (from 2026-10-06) | 8002 | `/nhl/` |
+| `overlay-nfl` | NFL (from 2026-10-06) | 8003 | `/nfl/` |
+| `overlay-cfb` | College football, Power 4 + Notre Dame only (from 2026-10-06) | 8004 | `/cfb/` |
 
 ```bash
 cp /opt/overlay/deploy/overlay-{nhl,nfl,cfb}.service /etc/systemd/system/
@@ -109,23 +109,43 @@ positions and Kalshi's public leaderboard and opt-in holdings, all keyless. One 
 wallets are fetched once per 20 minutes in total, not once per sport. A refresh that runs long falls back
 to the cached copy after 90 seconds and logs a `[toptraders]` line.
 
-The sport units bind `0.0.0.0` with no auth, by the owner's choice, so they are reachable at
-`http://YOUR_DROPLET_IP:8001` through `:8004`. That is a deliberate exception to the advice below. The
-server runs with every API key blank, so a visitor cannot trigger a paid call, but anyone with the URL
-can see the board.
+### One site for every board
+
+nginx puts every board on one address, `http://YOUR_DROPLET_IP/`: `/nfl/`, `/cfb/`, `/nhl/`, `/mlb/` and
+`/wc/`, each routed to its board's port, and a sport switcher at the top of the page moves between them
+(keeping the tab you are on). The front door, `/`, goes to the first board in that order with games coming
+up, so it lands on the NFL in the fall and on MLB in the summer.
+
+```bash
+bash /opt/overlay/deploy/setup-nginx.sh          # writes the nginx config; safe to re-run
+echo 'OVERLAY_ONE_SITE=1' >> /opt/overlay/.env    # old per-port page loads redirect to the site
+systemctl restart overlay overlay-mlb overlay-nhl overlay-nfl overlay-cfb
+```
+
+The page asks for its files and API relative to its own address, so a board works the same at `/nfl/` and
+on its own port. Every board now shares one browser origin, so saved page settings (the lotto stake and
+construction) carry across sports; each sport keeps its own Bet Slip draft.
+
+The sport units still bind `0.0.0.0` with no auth, by the owner's choice: with `OVERLAY_ONE_SITE=1` a page
+load on `:8001` through `:8004` (an old bookmark) is sent to the board's address on the site, and the API
+still answers there. That is a deliberate exception to the advice below. The server runs with every API
+key blank, so a visitor cannot trigger a paid call, but anyone with the URL can see the board.
 
 ## Reaching it (there is no built-in auth)
 
-The service binds to `127.0.0.1`, so it is not exposed to the internet by default. Do **not** change it to
-`--host 0.0.0.0` without putting auth in front: the dashboard has no login. Two good options:
+The archive service binds to `127.0.0.1`, and the dashboard has no login. The one-site setup above makes
+every board public on port 80, which is the owner's choice for this deployment. For a private setup:
 
 - **SSH tunnel (simplest).** From your laptop:
   `ssh -L 8000:127.0.0.1:8000 overlay@YOUR_DROPLET_IP` then open `http://localhost:8000`. Nothing is
-  public; you see it only while the tunnel is open. The heartbeat keeps the data fresh regardless.
-- **nginx + HTTP basic auth + TLS.** Reverse-proxy a domain to `127.0.0.1:8000`, add a basic-auth
-  password (`htpasswd`), and get a free certificate with `certbot`. Use this if you want a real URL.
+  public; you see it only while the tunnel is open. A loopback address is never redirected to the site,
+  so the tunnel works with `OVERLAY_ONE_SITE=1` too. The heartbeat keeps the data fresh regardless.
+- **nginx + HTTP basic auth.** `bash deploy/setup-nginx.sh <user> <pass>` puts a password on the site
+  (the boards' own ports stay open unless you bind them to `127.0.0.1` too). For TLS, add a domain and
+  `certbot`; re-running the script rewrites the nginx config, so re-run `certbot` after it.
 
-A `ufw` firewall allowing only SSH (22) and, if you use nginx, HTTPS (443) is a sensible default.
+With a `ufw` firewall, allow SSH (22) and HTTP (80), plus HTTPS (443) if you add TLS; close 8001 to 8004
+if you want the boards reachable only through the site.
 
 ## Keeping data safe
 
