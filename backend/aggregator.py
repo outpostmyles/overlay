@@ -286,6 +286,35 @@ async def attach_kickoffs(picks: list[dict]) -> None:
         p["kickoff"] = ko or ((p.get("commence_time") or "9999") + "T23:59:59")   # unknown → end of its day
 
 
+async def _pre_start_closes(favs: list[dict]) -> dict:
+    """{(event, game_date): (selection, fair_prob)} for board favorites whose game has NOT started, the
+    input to paper.capture_closing. A closing line is the last PRE-start price; once a game is under way
+    its market trades on the score, so writing that price leaks the result into CLV. A game with no
+    verified ESPN kickoff gets no update at all, and two favorites sharing an (event, date), such as a
+    doubleheader, are ambiguous, so neither is written rather than guessing which close is whose."""
+    if not favs:
+        return {}
+    dates = {(f.get("commence_time") or "").replace("-", "")[:8] for f in favs}
+    kicks = await get_kickoffs([d for d in dates if len(d) == 8])
+    now = datetime.now(timezone.utc)
+    pair_only = sports.active().pair_only_key
+    out: dict = {}
+    clash: set = set()
+    for f in favs:
+        gdate = (f.get("commence_time") or "")[:10]
+        pair = frozenset((f.get("team_key"), f.get("opp_key")))
+        kdt = _parse_iso(kicks.get(pair) if pair_only else kicks.get((pair, gdate)))
+        if kdt is None or now >= kdt:
+            continue
+        key = (f.get("event"), gdate)
+        if key in out:
+            clash.add(key)
+        out[key] = (f"{f.get('team')} ML", f.get("fair_prob"))
+    for key in clash:
+        out.pop(key, None)
+    return out
+
+
 def _slate_matchups(markets: list[Market]) -> list[dict]:
     """Favorite-vs-underdog pairs for moneyline games on the slate (today + horizon), soonest
     first. Feeds match-level smart money. Mirrors the favorite logic in picks.generate."""
@@ -1654,7 +1683,8 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
                                              f5=_f5_by_game(markets))
             paper.log_forecasts(fcands, now_utc.date().isoformat())
             paper.lock_forecasts(fboard, now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            paper.capture_forecast_close(fboard)   # CLV analog: last pre-start tick = the closing line
+            paper.capture_forecast_close(fboard,   # CLV analog: last pre-start tick = the closing line
+                                         now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
             paper.settle_forecasts(results, team_stats)
             rows = paper.list_forecasts()                   # frozen (locked) + graded (settled)
             frozen = {r["dedup_key"] for r in rows}
@@ -1730,7 +1760,7 @@ async def build_snapshot(force: bool = False, refresh_odds: bool = False,
     if settled_n or settled_p or settled_x or settled_pp or settled_c or voided:
         print(f"[aggregator] settled {settled_n} ML + {settled_p} parlay + {settled_x} prop "
               f"+ {settled_pp} player-prop + {settled_c} corners; voided {voided}")
-    paper.capture_closing({f["event"]: f["fair_prob"] for f in picks_board["favorite_ml"]})
+    paper.capture_closing(await _pre_start_closes(picks_board["favorite_ml"]))
 
     # liveness from ALL markets (best is moneyline-only now; Polymarket only supplies futures)
     def _live(name: str) -> bool:

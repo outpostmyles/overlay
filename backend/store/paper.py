@@ -16,7 +16,7 @@ import json
 import re
 import sqlite3
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .. import config
@@ -486,20 +486,39 @@ def settle_parlays(results: list[dict]) -> int:
     return settled
 
 
+def _utc(s: str | None):
+    """Parse an ISO stamp ('...Z' or '+00:00', with or without seconds) to an aware datetime, or None."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def capture_closing(fair_now: dict) -> None:
-    """Update closing_fair_prob for pending ML picks whose match is still live in `fair_now`
-    ({match: current_fair_prob}). Overwriting until the market disappears ≈ locking the close."""
+    """Update closing_fair_prob for pending favorite-ML picks while their game has not started.
+    `fair_now` is {(match, game_date): (selection, current_fair_prob)}, built by the aggregator from
+    the board's favorites and filtered to games whose verified kickoff is still in the future, so the
+    last write before first pitch IS the close.
+
+    The old contract ({match: prob}, overwritten until the market vanished) kept writing through the
+    whole game, because a market trades in-play and a pick stays pending until it settles: 10 of the
+    23 WC closes ended pinned at 0.989, and all 10 won. Keying by date also stops one game of a series
+    overwriting another game's close (the matchup string repeats across a series), and a pick is only
+    written while it backs the team that is still the favorite, so a flipped favorite never hands it
+    the other side's price. A pick whose game has started keeps its last pre-start value."""
     if not fair_now:
         return
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, match FROM paper_picks WHERE status='pending' "
-            "AND archetype NOT IN ('parlay', 'total_corners') AND pick_fair_prob IS NOT NULL"
+            "SELECT id, match, commence_time, selection FROM paper_picks WHERE status='pending' "
+            "AND archetype='favorite_ml' AND pick_fair_prob IS NOT NULL"
         ).fetchall()
         for r in rows:
-            cur = fair_now.get(r["match"])
-            if cur is not None:
-                c.execute("UPDATE paper_picks SET closing_fair_prob=? WHERE id=?", (cur, r["id"]))
+            hit = fair_now.get((r["match"], (r["commence_time"] or "")[:10]))
+            if hit and hit[0] == r["selection"] and hit[1] is not None:
+                c.execute("UPDATE paper_picks SET closing_fair_prob=? WHERE id=?", (hit[1], r["id"]))
 
 
 def update_pick(pick_id: int, status: str | None = None, real_money=None) -> None:
@@ -795,17 +814,27 @@ def _corners_total_index(team_stats: dict | None) -> dict:
     return idx
 
 
-def capture_forecast_close(board: dict) -> None:
+def capture_forecast_close(board: dict, now_iso: str | None = None) -> None:
     """Overwrite-until-start closing capture for LOCKED forecasts (the ledger's CLV analog): every
     tick before the game begins rewrites closing_*, so the last pre-start write IS the close. Never
-    written once the game has started (live prices are not a closing line)."""
+    written once the game has started (live prices are not a closing line).
+
+    Two independent stops. The board flags a started game as `missed`, but only while it still knows
+    the kickoff: if ESPN drops the game for a refresh, the board can keep emitting it, unflagged, with
+    in-play prices. So when `now_iso` is given, the row's own kickoff_iso (frozen at lock) is checked
+    too, and the close holds at first pitch whatever the board says."""
     if not board:
         return
+    now = _utc(now_iso)
     with _conn() as c:
-        rows = c.execute("SELECT id, dedup_key FROM forecasts WHERE status='locked'").fetchall()
+        rows = c.execute(
+            "SELECT id, dedup_key, kickoff_iso FROM forecasts WHERE status='locked'").fetchall()
         for r in rows:
             b = board.get(r["dedup_key"])
             if not b or b.get("missed"):
+                continue
+            ko = _utc(r["kickoff_iso"])
+            if now and ko and now >= ko:
                 continue
             k = b["market"]
             c.execute("UPDATE forecasts SET closing_a=?, closing_draw=?, closing_b=? WHERE id=?",
