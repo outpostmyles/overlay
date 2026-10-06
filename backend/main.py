@@ -15,6 +15,19 @@ from .store import leans, paper
 
 app = FastAPI(title="poly — World Cup betting dashboard")
 
+
+@app.middleware("http")
+async def _revalidate_frontend(request, call_next):
+    """The dashboard's HTML, JavaScript and CSS ship together, but with no caching instructions a browser
+    keeps each one on its own heuristic schedule, so an update could pair new JavaScript with an old
+    stylesheet (seen live: a table class arrived without the rule that styles it). no-cache makes the
+    browser revalidate on every load, and the static files answer 304 when nothing changed, so it costs
+    a round trip, not a download. API responses are left alone."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/api"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 _heartbeat_task: asyncio.Task | None = None
 
 
