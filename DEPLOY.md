@@ -76,7 +76,7 @@ selected by a `SPORT` environment variable and bound to its own port. The unit f
 
 | Unit | Sport | Port | Address on the site |
 |---|---|---|---|
-| `overlay` | World Cup 2026 (finished, kept as an archive; heartbeat off) | 8000 (local only) | `/wc/` |
+| `overlay` | World Cup 2026: finished, stopped and disabled since 2026-10-06; its data stays in `poly.db` | 8000 (local only) | not served |
 | `overlay-mlb` | MLB | 8001 | `/mlb/` |
 | `overlay-nhl` | NHL (from 2026-10-06) | 8002 | `/nhl/` |
 | `overlay-nfl` | NFL (from 2026-10-06) | 8003 | `/nfl/` |
@@ -111,8 +111,9 @@ to the cached copy after 90 seconds and logs a `[toptraders]` line.
 
 ### One site for every board
 
-nginx puts every board on one address, `http://YOUR_DROPLET_IP/`: `/nfl/`, `/cfb/`, `/nhl/`, `/mlb/` and
-`/wc/`, each routed to its board's port, and a sport switcher at the top of the page moves between them
+The World Cup is saved, not served: `systemctl disable --now overlay` stopped it on 2026-10-06, and its rows stay in `poly.db`. To look back at it, run `systemctl start overlay` and tunnel to it (`ssh -L 8000:127.0.0.1:8000 ...`, then `http://localhost:8000`).
+
+nginx puts every board on one address, `http://YOUR_DROPLET_IP/`: `/nfl/`, `/cfb/`, `/nhl/` and `/mlb/`, each routed to its board's port, and a sport switcher at the top of the page moves between them
 (keeping the tab you are on). The front door, `/`, goes to the first board in that order with games coming
 up, so it lands on the NFL in the fall and on MLB in the summer.
 
@@ -133,7 +134,7 @@ key blank, so a visitor cannot trigger a paid call, but anyone with the URL can 
 
 ## Reaching it (there is no built-in auth)
 
-The archive service binds to `127.0.0.1`, and the dashboard has no login. The one-site setup above makes
+The dashboard has no login. The one-site setup above makes
 every board public on port 80, which is the owner's choice for this deployment. For a private setup:
 
 - **SSH tunnel (simplest).** From your laptop:

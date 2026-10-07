@@ -1118,21 +1118,22 @@ def list_forecasts() -> list[dict]:
 # Price bands for the favorites tracker, labelled the way the bets are placed (American odds). A
 # three-way favorite can sit under 50% (a soccer game with a live draw: 11 World Cup favorites did), so
 # it gets the first band instead of falling through every band while still counting toward n.
-_FAV_BANDS = ((0.0, 0.50, "Under 50% (three-way)"), (0.50, 0.60, "-100 to -150"),
+_FAV_BANDS = ((0.50, 0.60, "-100 to -150"),
               (0.60, 0.70, "-150 to -233"), (0.70, 0.75, "-233 to -300"), (0.75, 1.01, "-300 or shorter"))
 
 
 def favorites_by_price() -> dict:
-    """How the market's favorite has done at each price, pooled across EVERY sport in the ledger, not just
-    the board asking. A 75% favorite is a 75% favorite in any sport, and pooling is the only way the heavy
-    end gets a usable sample: through the MLB season and the World Cup, favorites at 70% or more had won
-    24 of 25 against 18.5 expected. That was spotted in the data before it was tested, so it is a
-    hypothesis to watch, and the football seasons will add hundreds of heavy favorites to settle it.
-    One row per settled game: the side the market favored at lock (a favored draw is skipped). Every
-    counted game sits in exactly one band, and n is their sum, so the table always adds up."""
+    """How the market's favorite has done at each price, pooled across every live board, not just the board
+    asking. A 75% favorite is a 75% favorite in any sport, and pooling is the only way the heavy end gets
+    a usable sample. An archived sport (the World Cup) stays saved in the ledger but is left out here,
+    since the site no longer shows it. One row per settled game: the side the market favored at lock.
+    Every counted game sits in exactly one band, and n is their sum, so the table always adds up."""
+    from ..sports import get, keys
+    archived = {k for k in keys() if get(k).archived}
     with _conn() as c:
         rows = c.execute("SELECT COALESCE(sport, 'wc26') s, market_a, market_draw, market_b, actual_outcome "
                          "FROM forecasts WHERE status='settled' AND actual_outcome IS NOT NULL").fetchall()
+    rows = [r for r in rows if r["s"] not in archived]
     games = []
     for r in rows:
         opts = [("a", r["market_a"]), ("b", r["market_b"])] + ([("draw", r["market_draw"])] if r["market_draw"] else [])

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Put every Overlay board on one site: http://<droplet-ip>/nfl/, /cfb/, /nhl/, /mlb/ and /wc/.
+# Put every Overlay board on one site: http://<droplet-ip>/nfl/, /cfb/, /nhl/ and /mlb/.
 #
 # Installs nginx (once) as a reverse proxy in front of the boards. Each board is its own process on its
 # own local port (one sport per process, same code and database), and nginx routes each address to it,
@@ -29,7 +29,7 @@ if [ -n "$OVERLAY_USER" ] && [ -n "$OVERLAY_PASS" ]; then
 fi
 
 # The boards: address on the site, then the board's local port (see the systemd units in deploy/).
-BOARDS="nfl:8003 cfb:8004 nhl:8002 mlb:8001 wc:8000"
+BOARDS="nfl:8003 cfb:8004 nhl:8002 mlb:8001"     # the finished World Cup (8000) is saved, not served
 LOCATIONS=""
 for b in $BOARDS; do
     path="${b%%:*}"
@@ -47,6 +47,14 @@ done
 
 # Unquoted heredoc so ${AUTH} and ${LOCATIONS} expand; \$host / \$remote_addr stay literal for nginx.
 cat > /etc/nginx/sites-available/overlay <<NGINX
+# the front door's answer comes from the first board that is running (any board knows where to send you)
+upstream overlay_door {
+    server 127.0.0.1:8003;
+    server 127.0.0.1:8004 backup;
+    server 127.0.0.1:8002 backup;
+    server 127.0.0.1:8001 backup;
+}
+
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -57,11 +65,11 @@ ${AUTH}
     gzip_proxied any;
     gzip_types application/json application/javascript text/javascript text/css;
 
-    # the front door: the first board with games coming up (any board answers it; the archive is always on)
+    # the front door: the first board with games coming up, asked of whichever board is running
     location = / {
-        proxy_pass http://127.0.0.1:8000/go;
+        proxy_pass http://overlay_door/go;
         proxy_set_header Host \$host;
-        error_page 502 503 504 = @door;       # the archive is down: the first board in order instead
+        error_page 502 503 504 = @door;       # no board answering: the first board in order instead
     }
     location @door { return 302 /nfl/; }
     # the page carries its own icon; browsers still ask the site root for one
@@ -81,6 +89,6 @@ systemctl enable nginx >/dev/null 2>&1 || true
 IP=$(curl -s -4 --max-time 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 echo
 echo "=== DONE ==="
-echo "Open  http://${IP}/  (every board: /nfl/ /cfb/ /nhl/ /mlb/ /wc/)."
+echo "Open  http://${IP}/  (every board: /nfl/ /cfb/ /nhl/ /mlb/)."
 [ -n "$AUTH" ] && echo "Log in with the username + password you just set (plain HTTP basic auth, so the browser may say 'Not secure')."
 exit 0

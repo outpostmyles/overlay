@@ -16,8 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_board_has_its_own_address_in_season_order():
     boards = sports.boards()
-    assert [b.key for b in boards] == ["nfl", "cfb", "nhl", "mlb", "wc26"]
-    assert [b.site_path for b in boards] == ["nfl", "cfb", "nhl", "mlb", "wc"]
+    assert [b.key for b in boards] == ["nfl", "cfb", "nhl", "mlb"]      # the finished World Cup is saved, not shown
+    assert [b.site_path for b in boards] == ["nfl", "cfb", "nhl", "mlb"]
+    assert sports.get("wc26").archived and sports.get("wc26") not in boards
     assert len({b.code for b in boards}) == len(boards) and all(b.code for b in boards)
 
 
@@ -65,11 +66,12 @@ def test_nginx_routes_every_board_to_the_port_its_unit_listens_on():
     routes = dict(b.split(":") for b in re.search(r'BOARDS="([^"]+)"', script).group(1).split())
     assert set(routes) == {b.site_path for b in sports.boards()}
     for b in sports.boards():
-        unit = ROOT / "deploy" / ("overlay.service" if b.key == "wc26" else f"overlay-{b.key}.service")
+        unit = ROOT / "deploy" / f"overlay-{b.key}.service"
         text = unit.read_text()
         assert re.search(rf"--port {routes[b.site_path]}\b", text), b.key
-        assert b.key == "wc26" or f"SPORT={b.key}" in text
-    assert "X-Forwarded-Prefix /${path}" in script and "proxy_pass http://127.0.0.1:8000/go;" in script
+        assert f"SPORT={b.key}" in text
+    assert "X-Forwarded-Prefix /${path}" in script and "proxy_pass http://overlay_door/go;" in script
+    assert "127.0.0.1:8000" not in script and "/wc/" not in script        # nothing serves the World Cup
     # the trailing slash strips the board's prefix: /nfl/api/snapshot reaches the board as /api/snapshot
     assert "proxy_pass http://127.0.0.1:${port}/;" in script
     assert "text/javascript" in script                                  # app.js's type on Python 3.12

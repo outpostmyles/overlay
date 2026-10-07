@@ -72,9 +72,10 @@ BOARD_ORDER = ("nfl", "cfb", "nhl", "mlb", "wc26")
 
 
 def boards() -> list[SportAdapter]:
-    """Every board with an address on the site, in BOARD_ORDER (any other registered sport after)."""
+    """Every board the site shows, in BOARD_ORDER (any other registered sport after). An archived sport
+    (the finished World Cup) keeps its adapter, so its saved ledger stays readable, but it is not a board."""
     ordered = [k for k in BOARD_ORDER if k in _REGISTRY] + [k for k in _REGISTRY if k not in BOARD_ORDER]
-    return [_REGISTRY[k] for k in ordered if _REGISTRY[k].site_path]
+    return [_REGISTRY[k] for k in ordered if _REGISTRY[k].site_path and not _REGISTRY[k].archived]
 
 
 def pick_board(upcoming: dict) -> SportAdapter:

@@ -96,7 +96,7 @@ const RESEARCH_HINTS = {
   mlb: _hint("The de-vigged Kalshi price on every player prop line, and the market's clear favorites.",
     "Kalshi's prices with the vig removed are the sharp fair probability on each line. Hold your book's price on the same line against the fair odds: value only exists where the book pays more."),
 };
-const _BOARD_NAMES = { nfl: "NFL", cfb: "College Football", nhl: "NHL", mlb: "MLB", wc: "World Cup 2026" };
+const _BOARD_NAMES = { nfl: "NFL", cfb: "College Football", nhl: "NHL", mlb: "MLB" };
 // name the board from its address before the data arrives, so it never flashes as another sport
 (() => { const seg = location.pathname.split("/")[1]; const n = _BOARD_NAMES[seg];
   if (n) { const b = document.getElementById("sport-badge"); if (b) b.textContent = n; document.title = `Overlay · ${n}`; } })();
