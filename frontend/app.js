@@ -22,6 +22,29 @@ const mdLite = (s) => esc(s ?? "")
 const fmtPop = (n) => { n = n || 0; return Math.abs(n) >= 1000 ? (n / 1000).toFixed(1) + "k" : "" + n; };
 const dateLabel = (d) => (d == null ? "" : d === 0 ? "Today" : d === 1 ? "Tomorrow" : "in " + d + "d");
 
+// ---------- smooth re-renders ----------
+// The board refreshes every minute and every render rebuilds its panel. Assigning el.html instead of
+// el.innerHTML skips the rebuild when the markup is unchanged (no flicker, hover and focus stay put),
+// and when it did change, any "why" / "How this works" the reader had open stays open.
+// a fold is known by its own label plus the card or section it sits in, so one game's "why" stays open, not all
+const _foldKey = (summary) => {
+  const home = summary.parentElement.parentElement.closest(".fcard, .card, .pick-section, details");
+  const title = home && home.querySelector(".fcard-m, .bc-sel, h3, h2, summary");
+  return (title ? title.textContent.trim() : "") + "|" + summary.textContent.trim();
+};
+Object.defineProperty(HTMLElement.prototype, "html", {
+  configurable: true,
+  set(markup) {
+    if (this.__html === markup) return;
+    const open = new Set([...this.querySelectorAll("details[open] > summary")].map(_foldKey));
+    const scroll = [...this.querySelectorAll(".tbl-scroll, .bracket-wrap")].map((x) => x.scrollLeft);
+    this.innerHTML = markup;
+    this.__html = markup;
+    if (open.size) this.querySelectorAll("details > summary").forEach((x) => { if (open.has(_foldKey(x))) x.parentElement.open = true; });
+    this.querySelectorAll(".tbl-scroll, .bracket-wrap").forEach((x, i) => { if (scroll[i]) x.scrollLeft = scroll[i]; });
+  },
+});
+
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error(await r.text());
@@ -30,7 +53,8 @@ async function getJSON(url, opts) {
 
 // ---------- data ----------
 async function loadSnapshot(force = false, refreshOdds = false, reason = false) {
-  $("#meta-updated").textContent = reason ? "running AI analysis…" : refreshOdds ? "fetching sportsbook lines…" : "loading…";
+  if (reason || refreshOdds) $("#meta-updated").textContent = reason ? "running AI analysis…" : "fetching sportsbook lines…";
+  document.body.classList.add("is-loading");
   try {
     const qs = [];
     if (force) qs.push("force=true");
@@ -40,6 +64,9 @@ async function loadSnapshot(force = false, refreshOdds = false, reason = false) 
     renderAll();
   } catch (e) {
     $("#meta-updated").textContent = "error: " + e.message.slice(0, 80);
+  } finally {
+    document.body.classList.remove("is-loading");
+    document.body.classList.add("is-ready");
   }
 }
 async function loadPaper() {
@@ -172,7 +199,7 @@ function renderLeans(leans) {
   const done = leans.filter((l) => l.status === "won" || l.status === "lost");
   const w = done.filter((l) => l.status === "won").length;
   const rec = done.length ? ` · settled ${w}-${done.length - w}` : "";
-  return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted">· live <b>Drift</b> is the sharp line moving toward your call (up for a back, down for a fade); once a stage is decided the lean settles W/L with its realized <b>CLV</b>${rec}</span></h3>
+  return `<div class="pick-section"><h3>${ico("track")} Your leans <span class="muted sub">live <b>Drift</b> is the sharp line moving toward your call (up for a back, down for a fade); once a stage is decided the lean settles W/L with its realized <b>CLV</b>${rec}</span></h3>
     <table><thead><tr><th>Lean</th><th class="num">Entry</th><th class="num">Now / close</th><th class="num">Drift / CLV</th><th></th></tr></thead>
     <tbody>${leans.map(row).join("")}</tbody></table></div>`;
 }
@@ -429,7 +456,7 @@ function _favPriceHTML(fp) {
   const note = h && h.n
     ? `Favorites at -233 or shorter have won <b>${h.won} of ${h.n}</b> against ${h.expected} expected. That pattern was spotted in the data before it was tested, so it is something to watch, not a proven edge; the football seasons will add hundreds of these games.`
     : "";
-  return `<div class="pick-section"><h3>${ico("track")} Favorites by price <span class="muted">· every sport in the ledger, pooled (${fp.n} games)</span></h3>
+  return `<div class="pick-section"><h3>${ico("track")} Favorites by price <span class="muted sub">every sport in the ledger, pooled (${fp.n} games)</span></h3>
     <div class="tbl-scroll"><table class="flat"><thead><tr><th>Favorite's price</th><th class="num">Games</th><th class="num">Market said</th><th class="num">Actually won</th><th class="num">Record</th></tr></thead>
     <tbody>${fp.bands.map(row).join("")}</tbody></table></div>
     ${note ? `<div class="cal-note">${ico("shield")} <span>${note}</span></div>` : ""}</div>`;
@@ -467,7 +494,7 @@ function _researchStudyHTML(st, cat) {
   const note = football
     ? `A factor <b>adjusts</b> the Research % only where the market misprices it against the closing line, checked on every NFL game since 1999: today that is wind on NFL totals, plus rain from a published study. The rest are <b>tracked</b>: shown, graded, and left out of the number. The favorite bias failed that test (favorites won about as often as the de-vigged close said), so it moved to tracked.`
     : `Nothing adjusts the number on this board yet: every factor is <b>tracked</b>, shown on the game, graded, and left out of the number until it beats its price.`;
-  return `<div class="pick-section"><h3>${ico("track")} Research study <span class="muted">· each factor's record against what the market priced (${pool})</span></h3>
+  return `<div class="pick-section"><h3>${ico("track")} Research study <span class="muted sub">each factor's record against what the market priced (${pool})</span></h3>
     ${head}${tbl}
     <div class="cal-note muted"><span>${note} A z-score past +2 means a factor beat its price; near 0 means the market already prices it.</span></div>
     ${list}</div>`;
@@ -476,7 +503,7 @@ function _researchStudyHTML(st, cat) {
 function renderLedger() {
   const box = $("#ledger-body"); if (!box) return;
   const ml = state.snapshot && state.snapshot.picks && state.snapshot.picks.model_ledger;
-  if (!ml) { box.innerHTML = `<div class="muted" style="padding:14px">The Model Ledger fills in as the knockout games approach.</div>`; return; }
+  if (!ml) { box.html = `<div class="muted" style="padding:14px">The Model Ledger fills in as the knockout games approach.</div>`; return; }
   const rows = ml.rows || [];
   const locked = rows.filter((r) => r.status === "locked").map((r) => ({
     a: r.team_a, b: r.team_b, model: [r.model_a, r.model_draw, r.model_b], legs: r.legs,
@@ -490,11 +517,11 @@ function renderLedger() {
   // a game ESPN calls postponed or canceled waits after the live ones instead of heading the grid
   const cards = locked.filter((c) => !c.postponed).concat(upcoming, locked.filter((c) => c.postponed));
   const cardHtml = cards.length
-    ? `<div class="pick-section"><h3>${ico("markets")} Forecasts <span class="muted">· locked freezes the line ${ml.buffer_min || 75} min before the start; preview is the live ${hasModel ? "model" : "market"} line until then</span></h3><div class="fgrid">${cards.map(_forecastCard).join("")}</div></div>`
+    ? `<div class="pick-section"><h3>${ico("markets")} Forecasts <span class="muted sub">locked freezes the line ${ml.buffer_min || 75} min before the start; preview is the live ${hasModel ? "model" : "market"} line until then</span></h3><div class="fgrid">${cards.map(_forecastCard).join("")}</div></div>`
     : "";
   let settledHtml = "";
   if (settled.length) {
-    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted">· what the line said vs what happened, every line marked right or wrong${hasModel ? "; the 1X2 also scores the model against the market frozen at the same instant" : ""}</span></h3>
+    settledHtml = `<div class="pick-section"><h3>${ico("track")} Graded <span class="muted sub">what the line said vs what happened, every line marked right or wrong${hasModel ? "; the 1X2 also scores the model against the market frozen at the same instant" : ""}</span></h3>
       ${_legAccuracy(settled, ml.leg_tally)}${_perfScore(settled, ml.perf_tally)}
       ${ml.settled_total > settled.length ? `<div class="muted" style="padding:0 2px 8px">The ${settled.length} most recent of ${ml.settled_total} graded games; the scores above count all of them.</div>` : ""}
       <div class="fgrid">${settled.map(_settledCard).join("")}</div></div>`;
@@ -502,7 +529,7 @@ function renderLedger() {
   const empty = (!cards.length && !settled.length)
     ? `<div class="muted" style="padding:14px">No forecasts yet. Each knockout game is logged here and freezes about ${ml.buffer_min || 75} minutes before kickoff.</div>` : "";
   // the research study lives on the Research tab now; the World Cup (no research) keeps nothing extra
-  box.innerHTML = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + cardHtml + settledHtml + empty
+  box.html = _ledgerScore(ml.summary || { n: 0, min_n: 8, ready: false }) + cardHtml + settledHtml + empty
     + _favPriceHTML(ml.fav_price);
 }
 
@@ -513,13 +540,13 @@ function renderFutures() {
   const notes = `<div class="scout"><label for="scout-notes">${ico("analyze")} Your scouting notes <span class="muted">· what you've seen watching the games, fed into every Read</span></label>
     <textarea id="scout-notes" rows="2" placeholder="e.g. Spain flat, created nothing vs Cabo Verde; France clinical; Mexico crowd is a real factor">${esc(noteVal)}</textarea></div>`;
   if (!f.rows.length) {
-    box.innerHTML = notes + `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
+    box.html = notes + `<div class="empty">${ico("markets")}<div>No knockout futures yet. The bracket is rebuilt from finished group games; it fills in once all 12 groups are complete.${f.groups_covered ? ` <b>${f.groups_covered}/12</b> groups reconstructed so far.` : ""}</div></div>`;
     return;
   }
   if (f.archived) {
     const fin = f.final || {};
     const head = fin.winner ? `<div class="cal-note">${ico("check")}<span><b>Final:</b> ${esc(fin.winner_name || teamName(fin.winner))} ${fin.score_winner}-${fin.score_runner_up} ${esc(fin.runner_up_name || teamName(fin.runner_up))}${fin.date ? `, ${esc(_dateOnly(fin.date))}` : ""}. The bracket below is how it played out; the market and model odds on each tie are as they stood before it.</span></div>` : "";
-    box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout bracket <span class="muted">· World Cup 2026, final results</span></h2>` + head + renderBracket(f.bracket, true);
+    box.html = `<h2 class="ai-h">${ico("markets")} Knockout bracket <span class="muted sub">World Cup 2026, final results</span></h2>` + head + renderBracket(f.bracket, true);
     return;
   }
   const byKind = {}, recs = f.records || {};
@@ -536,7 +563,7 @@ function renderFutures() {
   const view = localStorage.getItem("overlay_futures_view") || "bracket";
   const toggle = `<span class="fview"><button class="act tiny ${view === "bracket" ? "on" : ""}" data-fview="bracket">Bracket</button><button class="act tiny ${view === "list" ? "on" : ""}" data-fview="list">List</button></span>`;
   const main = view === "list" ? Object.keys(byKind).map(section).join("") : (bracketKeyReads(f.bracket) + renderScenario() + renderBracket(f.bracket));
-  box.innerHTML = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted">· de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
+  box.html = `<h2 class="ai-h">${ico("markets")} Knockout futures <span class="muted sub">de-vigged Polymarket vs model · ${f.sims.toLocaleString()} sims · ${f.groups_covered}/12 groups${locked}</span> ${toggle}</h2>`
     + `<div class="cal-note">${ico("shield")}<span><b>Market</b> is the de-vigged Polymarket price, the sharp vig-free probability and the number to trust. Each team's % is its odds to win that tie and advance; the small <b>tie</b> line gives market vs model for the top team. Switch to <b>List</b> to tap <b>Read</b> (an AI take weighing your notes) and log <b>Back</b> / <b>Fade</b> leans.</span></div>`
     + notes + renderLeans(f.leans) + main;
 }
@@ -631,15 +658,15 @@ function renderPicks() {
   const p = s.picks || {}, m = s.meta;
   const ab = $("#ai-banner");
   const aiCount = Object.keys(p.ai || {}).length;
-  if (m.archived) { ab.className = ""; ab.innerHTML = ""; $("#today-card").innerHTML = ""; renderArchive(p); return; }
+  if (m.archived) { ab.className = ""; ab.html = ""; $("#today-card").html = ""; renderArchive(p); return; }
   if (!m.ai_enabled) {
-    ab.className = ""; ab.innerHTML = "";          // a keys-blank board: nothing to switch on here
+    ab.className = ""; ab.html = "";          // a keys-blank board: nothing to switch on here
   } else if (aiCount) {
     ab.className = "banner ok";
-    ab.innerHTML = `${ico("check")}<span>AI analysis ready — <b>${aiCount}</b> match${aiCount > 1 ? "es" : ""} analyzed. Full reasoning is on the <b>Research</b> tab. Cached for today — re-running is free.</span>`;
+    ab.html = `${ico("check")}<span>AI analysis ready — <b>${aiCount}</b> match${aiCount > 1 ? "es" : ""} analyzed. Full reasoning is on the <b>Research</b> tab. Cached for today — re-running is free.</span>`;
   } else {
     ab.className = "banner warn";
-    ab.innerHTML = `${ico("analyze")}<span><b>AI is on.</b> Tap <b>Analyze</b> (top-right) for reasoned verdicts on today's favorites — a few cents. Heuristic reads + favorites show below meanwhile.</span>`;
+    ab.html = `${ico("analyze")}<span><b>AI is on.</b> Tap <b>Analyze</b> (top-right) for reasoned verdicts on today's favorites — a few cents. Heuristic reads + favorites show below meanwhile.</span>`;
   }
   renderTodayCard(p);
   renderBestBets(p);
@@ -649,7 +676,7 @@ function renderTodayCard(p) {
   const box = $("#today-card");
   const sgp = (p.suggested_sgp && p.suggested_sgp.pricing) ? p.suggested_sgp : null;
   const parlay = p.parlay_of_day, pod = p.picks_of_day || [];
-  if (!sgp && !parlay && !pod.length) { box.innerHTML = ""; return; }
+  if (!sgp && !parlay && !pod.length) { box.html = ""; return; }
   const tag = (a) => `<span class="tag">${esc((a || "").replace(/_/g, " "))}</span>`;
   let html = `<div class="card today"><h3>${ico("analyze")} Today's Card</h3><div class="today-grid">`;
   if (sgp) {
@@ -681,7 +708,7 @@ function renderTodayCard(p) {
     });
     html += `</div>`;
   }
-  box.innerHTML = html + `</div></div>`;
+  box.html = html + `</div></div>`;
 }
 
 // the finished tournament: who won, and where its graded record lives
@@ -691,7 +718,7 @@ function renderArchive(p) {
     ? `<div class="card archive-card"><div class="today-label">${ico("check")} World Cup 2026 is over</div>
         <div class="arch-final"><b>${esc(fin.winner_name || teamName(fin.winner))}</b> ${fin.score_winner}-${fin.score_runner_up} <b>${esc(fin.runner_up_name || teamName(fin.runner_up))}</b> <span class="muted">· final, ${esc(_dateOnly(fin.date))}</span></div>`
     : `<div class="card archive-card"><div class="today-label">${ico("check")} World Cup 2026 is over</div>`;
-  $("#bestbets").innerHTML = head + `<div class="muted">This board is the archive. Every game's graded line is on <b>Model Ledger</b>, the AI's picks and their record on <b>Track Record</b>, and the knockout bracket on <b>Futures</b>. The live boards are in the switcher on the left.</div></div>`;
+  $("#bestbets").html = head + `<div class="muted">This board is the archive. Every game's graded line is on <b>Model Ledger</b>, the AI's picks and their record on <b>Track Record</b>, and the knockout bracket on <b>Futures</b>. The live boards are in the switcher on the left.</div></div>`;
 }
 const _dateOnly = (d) => { const x = new Date((d || "").slice(0, 10) + "T12:00:00"); return isNaN(x) ? (d || "") : x.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); };
 
@@ -699,7 +726,7 @@ function renderBestBets(p) {
   const box = $("#bestbets"), bb = p.best_bets || [];
   const ai = ((state.snapshot || {}).meta || {}).ai_enabled;
   if (!bb.length) {
-    box.innerHTML = `<div class="empty">${ico("picks")}<div>${ai ? "No bets surfaced yet. Tap Analyze for AI picks, or open the <b>Research</b> tab to browse candidates." : "No clear favorites on this board in the next few days."}</div></div>`;
+    box.html = `<div class="empty">${ico("picks")}<div>${ai ? "No bets surfaced yet. Tap Analyze for AI picks, or open the <b>Research</b> tab to browse candidates." : "No clear favorites on this board in the next few days."}</div></div>`;
     return;
   }
   const days = [...new Set(bb.map((c) => c.days_out).filter((d) => d != null))].sort((a, b) => a - b);
@@ -713,7 +740,7 @@ function renderBestBets(p) {
 
   const fades = (p.fades || []).filter((x) => f == null || x.days_out === f);
   const fadeHtml = fades.length
-    ? `<div class="fade-section"><h2 class="ai-h">${ico("fade")} Fade the crowd <span class="muted">· popular traps to avoid</span></h2>
+    ? `<div class="fade-section"><h2 class="ai-h">${ico("fade")} Fade the crowd <span class="muted sub">popular traps to avoid</span></h2>
        <div class="fade-grid">${fades.map(fadeCard).join("")}</div></div>`
     : "";
 
@@ -728,9 +755,9 @@ function renderBestBets(p) {
 
   // "best bets" only when a real price beats our number; otherwise these are the market's favorites
   const anyValue = bb.some((c) => c.value || (c.stake_units && c.source !== "model" && c.source !== "market"));
-  const title = anyValue ? `Best bets <span class="muted">· a real price beats our number on these first</span>`
-    : `Favorites <span class="muted">· the market's likeliest winners; no price beats our number right now, so there is no stake</span>`;
-  box.innerHTML = `<h2 class="ai-h">${ico("picks")} ${title}</h2>${staleBanner}${chips}${grid}${fadeHtml}`;
+  const title = anyValue ? `Best bets <span class="muted sub">A real price beats our number on these first.</span>`
+    : `Favorites <span class="muted sub">The market's likeliest winners. No price beats our number right now, so there is no stake.</span>`;
+  box.html = `<h2 class="ai-h">${ico("picks")} ${title}</h2>${staleBanner}${chips}${grid}${fadeHtml}`;
 }
 
 const _VENUE = { kalshi: "Kalshi", polymarket: "Polymarket", draftkings: "DraftKings" };
@@ -841,14 +868,14 @@ function _livePrice(leg) {   // the leg's Research % right now, from the live bo
 function _valueNowHTML(rows) {
   const research = !!(((state.snapshot || {}).picks || {}).model_ledger || {}).research_catalog;
   const ours = research ? "the Research %" : "the market's fair price";
-  if (!rows || !rows.length) return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· lines where a real price beats ${ours} by its cushion</span></h3><div class="muted" style="padding:6px 2px">Nothing clears the cushion right now. Prices move as games approach; this list refreshes with the board.</div></div>`;
+  if (!rows || !rows.length) return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted sub">lines where a real price beats ${ours} by its cushion</span></h3><div class="muted" style="padding:6px 2px">Nothing clears the cushion right now. Prices move as games approach; this list refreshes with the board.</div></div>`;
   const row = (r) => {
     const leg = { dedup: r.dedup, kind: r.kind, team: r.team, dir: r.dir, line: r.line, p: r.p };
     return `<div class="vn-row"><span><b>${esc(_legLabel(leg))}</b> <span class="muted">${esc(teamName(r.team_a))} v ${esc(teamName(r.team_b))} · ${_koLabel(r.kickoff_iso, r.time_tbd)}</span></span>
       <span class="vn-r"><span>${esc(r.venue)} <b>${_amer(r.price)}</b> <span class="ev pos">${_evTxt(r.ev)}</span></span>
       <button class="act tiny" data-slip-add='${esc(JSON.stringify({ ...leg, price: r.price, venue: r.venue }))}'>add to slip</button></span></div>`;
   };
-  return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted">· ${rows.length} line${rows.length > 1 ? "s" : ""} where a real price beats ${ours} by its cushion (2%, more while a question is open)</span></h3>${rows.map(row).join("")}</div>`;
+  return `<div class="pick-section"><h3>${ico("value")} Value now <span class="muted sub">${rows.length} line${rows.length > 1 ? "s" : ""} where a real price beats ${ours} by its cushion (2%, more while a question is open)</span></h3>${rows.map(row).join("")}</div>`;
 }
 function _parlayHTML(slip, games) {
   const legs = slip.legs.map((l) => ({ ...l, p: _livePrice(l) }));
@@ -881,7 +908,7 @@ function _parlayHTML(slip, games) {
     ${shown.slice(0, 40).map((g) => `<div class="sp-game"><div class="sp-h"><b>${esc(teamName(g.team_a))}</b> <span class="muted">v</span> <b>${esc(teamName(g.team_b))}</b> <span class="muted">${_koLabel(g.kickoff_iso, g.time_tbd)}</span></div>
       <div class="sp-sides">${_gameSides(g).map((x) => `<button class="sp-side ${inSlip.has(_legId(x)) ? "on" : ""}" data-slip-add='${esc(JSON.stringify(x))}'>${esc(_legLabel(x))} <span class="muted">${x.pct != null ? x.pct + "%" : x.p ? Math.round(x.p * 100) + "%" : ""}</span></button>`).join("")}</div></div>`).join("")}
     ${shown.length > 40 ? `<div class="muted">${shown.length - 40} more: narrow it with the search</div>` : ""}</div>`;
-  return `<div class="pick-section"><h3>${ico("sgp")} Parlay checker <span class="muted">· the true chance it hits, from the Research % of each leg, against your book's payout</span></h3>${legRows}${stats}${warn}${form}
+  return `<div class="pick-section"><h3>${ico("sgp")} Parlay checker <span class="muted sub">the true chance it hits, from the Research % of each leg, against your book's payout</span></h3>${legRows}${stats}${warn}${form}
     <details class="rs-notes" ${slip.legs.length ? "" : "open"}><summary>${ico("chevron", "ico ico-chev")} add legs from any game</summary>${picker}</details></div>`;
 }
 function _myBetsHTML(d) {
@@ -903,7 +930,7 @@ function _myBetsHTML(d) {
       <td><button class="act tiny" data-bet-rm="${b.id}" title="delete this bet">×</button></td></tr>`).join("");
   const table = rows ? `<div class="tbl-scroll"><table class="flat"><thead><tr><th>Bet</th><th>Book</th><th class="num">Price</th><th class="num">Stake</th><th>Status</th><th class="num">Profit</th><th class="num">CLV</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
     : `<div class="muted" style="padding:6px 2px">No bets logged yet. Build one above and tap <b>Log this bet</b>.</div>`;
-  return `<div class="pick-section"><h3>${ico("bets")} My bets <span class="muted">· what you actually bet, graded off the final and scored against the close</span></h3>${head}${table}</div>`;
+  return `<div class="pick-section"><h3>${ico("bets")} My bets <span class="muted sub">what you actually bet, graded off the final and scored against the close</span></h3>${head}${table}</div>`;
 }
 function renderSlip(force) {
   const box = $("#slip-body"); if (!box) return;
@@ -911,7 +938,7 @@ function renderSlip(force) {
   if (!force && box.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
   const p = (state.snapshot && state.snapshot.picks) || {};
   const slip = _slipLoad();
-  box.innerHTML = _valueNowHTML(p.value_now) + _parlayHTML(slip, p.slip_games) + _myBetsHTML(state.mybets);
+  box.html = _valueNowHTML(p.value_now) + _parlayHTML(slip, p.slip_games) + _myBetsHTML(state.mybets);
 }
 async function loadMyBets() {
   try { state.mybets = await getJSON("api/mybets"); } catch (e) { state.mybets = { bets: [], summary: {} }; }
@@ -1031,7 +1058,7 @@ function _lottoTrackedHTML(lotto) {
   const byWeekend = {};
   tracked.forEach((t) => (byWeekend[t.weekend] = byWeekend[t.weekend] || []).push(t));
   const blocks = Object.keys(byWeekend).sort().reverse().map((w) => `<div class="lt-week"><div class="muted lt-wk">${esc(_weekendLabel(w))}</div>${byWeekend[w].map(row).join("")}</div>`).join("");
-  return `<div class="pick-section"><h3>${ico("track")} Tracked tickets <span class="muted">· frozen every Saturday morning and graded leg by leg, whether you bet them or not</span></h3>${waiting}${blocks}</div>`;
+  return `<div class="pick-section"><h3>${ico("track")} Tracked tickets <span class="muted sub">frozen every Saturday morning and graded leg by leg, whether you bet them or not</span></h3>${waiting}${blocks}</div>`;
 }
 function _lottoStudyHTML(st) {
   if (!st || !st.legs || !st.legs.length) return `<div class="pick-section"><h3>${ico("value")} What the tickets are teaching</h3><div class="muted" style="padding:6px 2px">Fills in as the first tracked legs grade. Each row compares how often a kind of leg actually won with what its price said; a group that keeps winning less than priced comes off future tickets.</div></div>`;
@@ -1039,13 +1066,13 @@ function _lottoStudyHTML(st) {
   const names = { all: "All legs", style: "Construction", sport: "Sport", band: "Price", flag: "Research flag" };
   const rows = st.legs.map((r) => `<tr><td><span class="muted">${esc(names[r.group] || r.group)}</span> <b>${esc(r.group === "style" ? _variantName(r.key.split(":")[1]) : r.label)}</b></td><td class="num">${r.n}</td><td class="num">${pct(r.priced)}</td><td class="num">${pct(r.actual)}</td><td class="num ${r.z == null ? "" : r.z >= 2 ? "pos" : r.z <= -2 ? "neg" : ""}">${r.z == null ? "-" : r.z}</td></tr>`).join("");
   const close = (st.closest || []).length ? `<div class="cal-note muted"><span>Closest calls: ${st.closest.map((c) => `${c.won} of ${c.legs} legs (${esc(_money0(c.target))}+ ${esc(_variantName(c.variant))}, ${esc(c.weekend)})`).join(" · ")}</span></div>` : "";
-  return `<div class="pick-section"><h3>${ico("value")} What the tickets are teaching <span class="muted">· ${st.graded} graded of ${st.tickets} tickets over ${st.weekends} weekend${st.weekends === 1 ? "" : "s"}; ${st.hits} hit against ${st.expected_hits} expected</span></h3>
+  return `<div class="pick-section"><h3>${ico("value")} What the tickets are teaching <span class="muted sub">${st.graded} graded of ${st.tickets} tickets over ${st.weekends} weekend${st.weekends === 1 ? "" : "s"}; ${st.hits} hit against ${st.expected_hits} expected</span></h3>
     <div class="tbl-scroll"><table class="flat"><thead><tr><th>Legs</th><th class="num">Graded</th><th class="num">Priced to win</th><th class="num">Actually won</th><th class="num">z</th></tr></thead><tbody>${rows}</tbody></table></div>${close}</div>`;
 }
 function renderLotto() {
   const box = $("#lotto-body"); if (!box) return;
   const lotto = (state.snapshot && state.snapshot.picks && state.snapshot.picks.lotto) || null;
-  if (!lotto) { box.innerHTML = `<div class="muted" style="padding:14px">The lotto builder fills in once the boards have games this weekend.</div>`; return; }
+  if (!lotto) { box.html = `<div class="muted" style="padding:14px">The lotto builder fills in once the boards have games this weekend.</div>`; return; }
   const ls = _lottoState();
   const found = (lotto.tickets || []).find((x) => x.stake === ls.stake && x.target === ls.target && x.variant === ls.variant);
   // tickets name their legs by position in the pool; older snapshots carried the legs themselves
@@ -1059,7 +1086,7 @@ function renderLotto() {
       <label>Legs <select id="lotto-variant">${_LOTTO_VARIANTS.map(([k, v]) => `<option value="${k}" ${k === ls.variant ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     </div>`;
   const note = `<details class="lt-how"><summary>${ico("chevron", "ico ico-chev")} <b>The payout sets the odds, and the book takes a cut of every leg</b></summary><div class="cal-note muted"><span>At fair prices $5 to win $1,000 is about 1 in 200 whatever the legs. A sportsbook pays a little under fair on each leg and the cut compounds (US books keep 20 to 30% of parlay money), so the same $1,000 at DraftKings is more like 1 in 250 to 1 in 400. How much depends on the legs: heavy favorites lose the most per dollar of payout, since it takes so many of them, while legs from about 35% to 75% lose the least. That is why "least lost to the book" mixes in up to two moderate underdogs, never long shots. The other levers: a bigger stake (up to $5 here), and a parlay profit boost, which on a ticket this long can cancel most of the book's cut. <b>${(lotto.legs || []).length}</b> sensible legs this weekend across ${boards.map((b) => b.toUpperCase()).join(", ") || "no boards"}.</span></div></details>`;
-  box.innerHTML = controls + note + (t ? _lottoTicketHTML(t) : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`)
+  box.html = controls + note + (t ? _lottoTicketHTML(t) : `<div class="muted" style="padding:14px">No sensible legs through this weekend yet.</div>`)
     + _lottoTrackedHTML(lotto) + _lottoStudyHTML(lotto.study);
 }
 document.addEventListener("change", (e) => {
@@ -1113,20 +1140,20 @@ function _topGame(g) {
 function renderTopBettors() {
   const box = $("#top-body"); if (!box) return;
   const tt = state.snapshot && state.snapshot.picks && state.snapshot.picks.top_traders;
-  if (!tt) { box.innerHTML = `<div class="muted" style="padding:14px">Top bettors are tracked on the NFL, college football, NHL and MLB boards.</div>`; return; }
+  if (!tt) { box.html = `<div class="muted" style="padding:14px">Top bettors are tracked on the NFL, college football, NHL and MLB boards.</div>`; return; }
   const m = tt.meta || {};
   const upd = m.updated ? new Date(m.updated * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "-";
   const head = `<div class="cal-note muted">${ico("smart")} <span>Tracking the <b>${m.poly_traders || 0}</b> Polymarket wallets in the top 100 sports traders by profit (this month and all-time) and the <b>${m.kalshi_traders || 0}</b> Kalshi traders in its top 100 (all-time and last 30 days), of whom <b>${m.kalshi_visible || 0}</b> share their holdings. Positions as of ${upd}, refreshed every 20 minutes. Big traders tend to build positions close to game time, so the board fills in as games approach.</span></div>`;
   const games = tt.games || [];
   const quiet = Math.max(0, (m.games_listed || 0) - games.length);
   const grid = games.length
-    ? `<div class="pick-section"><h3>${ico("smart")} By game <span class="muted">· ${games.length} game${games.length > 1 ? "s" : ""} with top-bettor positions${quiet ? `, ${quiet} more with none yet` : ""}; tap a line to see who holds it</span></h3><div class="fgrid">${games.map(_topGame).join("")}</div></div>`
+    ? `<div class="pick-section"><h3>${ico("smart")} By game <span class="muted sub">${games.length} game${games.length > 1 ? "s" : ""} with top-bettor positions${quiet ? `, ${quiet} more with none yet` : ""}; tap a line to see who holds it</span></h3><div class="fgrid">${games.map(_topGame).join("")}</div></div>`
     : `<div class="muted" style="padding:14px">No top-bettor positions on this board's games yet. They usually build close to game time.</div>`;
-  const lead = (tt.leaders || []).length ? `<div class="pick-section"><h3>${ico("track")} Who is active on this board <span class="muted">· leaderboard traders with money on these games</span></h3>
+  const lead = (tt.leaders || []).length ? `<div class="pick-section"><h3>${ico("track")} Who is active on this board <span class="muted sub">leaderboard traders with money on these games</span></h3>
     <div class="tbl-scroll"><table class="flat"><thead><tr><th>Trader</th><th>Rank</th><th class="num">Profit</th><th class="num">Lines</th><th class="num">On these games</th></tr></thead><tbody>${tt.leaders.map((r) => `<tr>
       <td><span class="tb-plat ${r.platform === "Kalshi" ? "k" : "p"}">${r.platform === "Kalshi" ? "K" : "PM"}</span> <b title="${esc(r.name)}">${esc(_handle(r.name))}</b>${r.mm ? ` <span class="rchip cau">market maker?</span>` : ""}</td>
       <td>#${r.rank} <span class="muted">${esc(r.window)}</span></td><td class="num">${_money(r.pnl)}</td><td class="num">${r.lines}</td><td class="num">${_money(r.stake)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
-  box.innerHTML = head + grid + lead;
+  box.html = head + grid + lead;
 }
 
 // ---------- render: Research (AI verdict detail + candidate browse) ----------
@@ -1146,7 +1173,7 @@ function renderResearch() {
   const cards = aiCount ? `<h2 class="ai-h">${ico("analyze")} AI slate analysis</h2>` + aiCardsHTML(ai) : "";
   const ml = p.model_ledger || {};
   const study = _researchStudyHTML(ml.research_study, ml.research_catalog);
-  $("#research-body").innerHTML = intro + cards + study + cornersHTML(p.corners) + kalshiPropsHTML(p.kalshi_props) + browseHTML(p);
+  $("#research-body").html = intro + cards + study + cornersHTML(p.corners) + kalshiPropsHTML(p.kalshi_props) + browseHTML(p);
 }
 
 // de-vigged Kalshi player props (free): the sharp fair probability on each line, research-only
@@ -1161,7 +1188,7 @@ function kalshiPropsHTML(rows) {
     <td class="muted">${r.days_out != null ? dateLabel(r.days_out) : ""}</td></tr>`;
   const total = ((state.snapshot || {}).picks || {}).kalshi_props_total || rows.length;
   const more = total > shown.length ? `the ${shown.length} soonest of ${total} lines; ` : "";
-  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted">· ${more}Kalshi's fair price with the vig removed; hold your book's price on the same line against it</span></h3>
+  return `<div class="pick-section"><h3>${ico("markets")} Player props <span class="muted sub">${more}Kalshi's fair price with the vig removed; hold your book's price on the same line against it</span></h3>
     <div class="tbl-scroll"><table class="flat"><thead><tr><th>Player</th><th>Prop</th><th class="num">Fair</th><th class="num">Fair odds (over / under)</th><th>When</th></tr></thead>
     <tbody>${shown.map(tr).join("")}</tbody></table></div></div>`;
 }
@@ -1188,7 +1215,7 @@ function cornersHTML(rows) {
       <td class="num ${evcls}">${evpct}</td>
       <td>${conf}</td></tr>`;
   }).join("");
-  return `<div class="pick-section corners-section"><h3>${ico("value")} Corners <span class="muted">· model total vs book line · a dominance market</span></h3>
+  return `<div class="pick-section corners-section"><h3>${ico("value")} Corners <span class="muted sub">model total vs book line · a dominance market</span></h3>
     <table><thead><tr><th>Match</th><th class="num">Projection</th><th class="num">Line</th><th>Lean</th><th class="num">EV</th><th>Conf</th></tr></thead><tbody>${body}</tbody></table>
     <div class="cal-note">${ico("shield")}<span>Projections use each team's corners-for/against shrunk to a league prior, adjusted for the opponent + projected possession. <b>prior</b> = no corner history yet (read, not bet). Tap <b>Odds</b> (left rail) to pull book lines for today/tomorrow (~1 credit/game); +EV corners with measured history then surface in <b>Best Bets</b> and log on <b>Analyze</b> like any other pick.</span></div></div>`;
 }
@@ -1306,7 +1333,7 @@ function propTable(rows) {
   }).join("")}</tbody></table>`;
 }
 function pickSection(title, sub, inner) {
-  return `<div class="pick-section"><h3>${title} <span class="muted">· ${sub}</span></h3>${inner}</div>`;
+  return `<div class="pick-section"><h3>${title} <span class="muted sub">${sub}</span></h3>${inner}</div>`;
 }
 function confMeter(n) {
   n = n || 0;
@@ -1370,7 +1397,7 @@ function renderPaper() {
     const r = d.summary.real;
     summary += stat("Real $ P/L", r.units_pl ? sgn(r.units_pl) + "u" : "—", r.units_pl > 0 ? "pos" : r.units_pl < 0 ? "neg" : "");
   }
-  $("#track-summary").innerHTML = bankrollHero(d.summary) + summary;
+  $("#track-summary").html = bankrollHero(d.summary) + summary;
 
   // calibration — gated; show real buckets only once any clears n>=20, else an honest progress note
   const cal = (state.snapshot && state.snapshot.picks && state.snapshot.picks.calibration) || [];
@@ -1378,7 +1405,7 @@ function renderPaper() {
   const calBox = $("#track-cal");
   if (calBox) {
     if (gated.length) {
-      calBox.innerHTML = `<div class="pick-section"><h3>Calibration <span class="muted">· nudges confidence once a bucket clears 20 (CLV-first, never excludes a pick)</span></h3>
+      calBox.html = `<div class="pick-section"><h3>Calibration <span class="muted sub">nudges confidence once a bucket clears 20 (CLV-first, never excludes a pick)</span></h3>
         <div class="tbl-scroll"><table><thead><tr><th>Context bucket</th><th class="num">Sample</th><th>Status</th><th class="num">Signal</th></tr></thead><tbody>${
         gated.map((r) => `<tr>
           <td><span class="tag">${esc(r.dim)}</span> ${esc(String(r.val).replace(/_/g, " "))}</td>
@@ -1387,7 +1414,7 @@ function renderPaper() {
           <td class="num">${r.score == null ? "—" : (r.metric === "clv" ? sgn(r.score) + "% CLV" : sgn(r.score) + "pp")}</td></tr>`).join("")}</tbody></table></div></div>`;
     } else {
       const best = cal.reduce((mx, r) => Math.max(mx, r.n_eff || 0), 0);
-      calBox.innerHTML = `<div class="cal-note">${ico("track")}<span>Confidence calibration unlocks once a context bucket reaches 20 settled picks. Best bucket so far: <b>${Math.round(best)}/20</b>.</span></div>`;
+      calBox.html = `<div class="cal-note">${ico("track")}<span>Confidence calibration unlocks once a context bucket reaches 20 settled picks. Best bucket so far: <b>${Math.round(best)}/20</b>.</span></div>`;
     }
   }
 
@@ -1409,7 +1436,7 @@ function renderPaper() {
   // a calibration row on two or three picks is noise, not a finding: only buckets of 20 or more show
   const mc = d.summary.model_calibration || {};
   const mck = Object.keys(mc).filter((k) => (mc[k].n || 0) >= 20);
-  const calTbl = mck.length ? `<div class="pick-section"><h3>Model calibration <span class="muted">· projected vs actual once picks settle · Brier lower = sharper (0.25 = coin flip)</span></h3>
+  const calTbl = mck.length ? `<div class="pick-section"><h3>Model calibration <span class="muted sub">projected vs actual once picks settle · Brier lower = sharper (0.25 = coin flip)</span></h3>
     <div class="tbl-scroll"><table><thead><tr><th>Archetype</th><th class="num">n</th><th class="num">Model says</th><th class="num">Actual</th><th class="num">Gap</th><th class="num">Brier</th></tr></thead><tbody>${
     mck.map((k) => { const m = mc[k]; const over = m.gap_pp > 5, under = m.gap_pp < -5; return `<tr>
       <td><span class="tag">${esc(k.replace(/_/g, " "))}</span></td>
@@ -1419,13 +1446,13 @@ function renderPaper() {
       <td class="num ${over ? "neg" : ""}">${sgn(m.gap_pp)}pp${over ? " over" : under ? " under" : ""}</td>
       <td class="num">${m.brier}</td></tr>`; }).join("")}</tbody></table></div>
     <div class="cal-note">${ico("track")}<span>A large positive gap (model says more than actual) means the model over-projects that archetype.</span></div></div>` : "";
-  $("#track-arch").innerHTML = archHtml + calTbl;
+  $("#track-arch").html = archHtml + calTbl;
 
   // pick ledger — split Open / Settled, ordered by kickoff
   const body = $("#track-body");
   if (!d.picks.length) {
     const aiOn = ((state.snapshot || {}).meta || {}).ai_enabled;
-    body.innerHTML = `<div class="empty">${ico("track")}<div>${aiOn ? "No picks logged yet. Tap <b>Analyze</b>: every recommended bet logs here and favorite moneylines settle themselves." : "No AI picks on this board. Its graded record is the <b>Model Ledger</b>, your own bets are under <b>Bet Slip</b>, and the weekend tickets under <b>Lotto</b>."}</div></div>`;
+    body.html = `<div class="empty">${ico("track")}<div>${aiOn ? "No picks logged yet. Tap <b>Analyze</b>: every recommended bet logs here and favorite moneylines settle themselves." : "No AI picks on this board. Its graded record is the <b>Model Ledger</b>, your own bets are under <b>Bet Slip</b>, and the weekend tickets under <b>Lotto</b>."}</div></div>`;
     return;
   }
   const dt = new Date();
@@ -1456,7 +1483,7 @@ function renderPaper() {
   const stream = list.length
     ? `<div class="track-stream">${list.map(trackCard).join("")}</div>`
     : `<div class="empty">no ${tab} picks</div>`;
-  body.innerHTML = `<div class="pick-section"><h3>Pick ledger</h3>${chips}${hint}${stream}</div>`;
+  body.html = `<div class="pick-section"><h3>Pick ledger</h3>${chips}${hint}${stream}</div>`;
   body.querySelectorAll("[data-pstatus]").forEach((sel) => sel.onchange = async () => {
     await getJSON("api/paper/" + sel.dataset.pstatus, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: sel.value }) });
     loadPaper();
@@ -1518,7 +1545,7 @@ function renderBoards(meta) {
   if (!box || !here || !location.pathname.startsWith("/" + here.path + "/")) { if (box) box.hidden = true; return; }
   const tab = state.tab && state.tab !== "picks" ? "#" + state.tab : "";
   box.hidden = false;
-  box.innerHTML = `<div class="nav-group">Sport</div><div class="board-row">${list.map((b) => {
+  box.html = `<div class="nav-group">Sport</div><div class="board-row">${list.map((b) => {
     const n = b.upcoming;
     const title = `${b.name}${n ? ` · ${n} game${n === 1 ? "" : "s"} coming up` : n === 0 ? " · no games coming up" : ""}`;
     return `<a class="board${b.sport === meta.sport ? " active" : ""}${n ? "" : " quiet"}" href="/${esc(b.path)}/${b.sport === meta.sport ? "" : tab}" title="${esc(title)}" aria-label="${esc(title)}">${esc(b.code)}</a>`;
