@@ -120,7 +120,7 @@ up, so it lands on the NFL in the fall and on MLB in the summer.
 ```bash
 bash /opt/overlay/deploy/setup-nginx.sh          # writes the nginx config; safe to re-run
 echo 'OVERLAY_ONE_SITE=1' >> /opt/overlay/.env    # old per-port page loads redirect to the site
-systemctl restart overlay overlay-mlb overlay-nhl overlay-nfl overlay-cfb
+systemctl restart overlay-mlb overlay-nhl overlay-nfl overlay-cfb
 ```
 
 The page asks for its files and API relative to its own address, so a board works the same at `/nfl/` and
@@ -173,7 +173,7 @@ the services, `gunzip` a copy over `/opt/overlay/poly.db` (owned by `overlay`), 
 ```bash
 cd /opt/overlay && sudo -u overlay git pull
 sudo -u overlay .venv/bin/pip install -q -r requirements.txt   # only if requirements changed
-systemctl restart overlay overlay-mlb overlay-nhl overlay-nfl overlay-cfb   # every installed unit
+systemctl restart overlay-mlb overlay-nhl overlay-nfl overlay-cfb   # every installed unit
 ```
 
 The new forecast table is created automatically on startup, and the ledger is forward-only, so updates
